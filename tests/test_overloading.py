@@ -219,7 +219,7 @@ def test_nodefault():
         f(1, 2, 3)
 
 
-def test_arg_subclasses():
+def test_arg_subclasses_1():
 
     @overloaded
     def f(foo:X, bar):
@@ -231,6 +231,21 @@ def test_arg_subclasses():
 
     assert f(x, 1) == ('X', 'any')
     assert f(y, 1) == ('Y', 'any')
+
+
+def test_arg_subclasses_2():
+
+    @overloaded
+    def f(foo, bar:X=None):
+        return ('any', 'X')
+
+    @overloads(f)
+    def f(foo, bar:Y=None, *args):
+        return ('any', 'Y')
+
+    assert f(1)    == ('any', 'X')
+    assert f(1, x) == ('any', 'X')
+    assert f(1, y) == ('any', 'Y')
 
 
 def test_named():

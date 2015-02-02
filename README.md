@@ -249,7 +249,9 @@ def f(foo, bar):
 'any, any'
 ```
 
-There is one exception to the signature uniqueness requirement. The default implementation is allowed to have a signature that also appears elsewhere. Thus, `f()` and `f(*args)` are permitted at the same time. To prevent conflicts, the default function always takes a lower priority if it matches with the same specificity as another function.
+Even though optional arguments are ignored when assessing signature uniqueness, they do count at invocation time when the actual argument matching is carried out.
+
+There is also one exception to the signature uniqueness requirement. The default implementation is allowed to have a signature that also appears elsewhere. Thus, `f()` and `f(*args)` are permitted at the same time. To prevent conflicts, the default function always takes a lower priority if it matches with the same specificity as another function.
 
 #### Limitations on argument inheritance
 
@@ -282,8 +284,6 @@ The most specific match between a set of arguments and a function signature is d
 2.  Pick the function that accepts the most arguments to fill its regular parameter slots.
 3.  In case of a tie, pick the function whose signature contains the greatest number of type annotations.
 4.  In case of a tie, pick the function whose signature contains the greatest number of required parameters.
-5.  In case of a tie, pick the function with the most explicit signature in terms of inheritance (i.e., one that specifies a subclass rather than a superclass).
+5.  In case of a tie, pick the function that provides the most explicit match in terms of inheritance (i.e., one that specifies a subclass rather than a superclass).
 6.  In case of a tie, one of the matches must be the default implementation, so pick the one that is not.
-
-Note that even though optional arguments are ignored when assessing signature uniqueness, they do count when looking at the number of matching arguments.
 

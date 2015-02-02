@@ -16,7 +16,7 @@ if sys.version_info[0] < 3:
 __all__ = ['overloaded', 'overloads']
 
 
-Match = namedtuple('Match', 'score, func, sig')
+Match = namedtuple('Match', 'score, func, argspec, sig, args_by_key')
 
 
 def overloaded(func):
@@ -53,7 +53,8 @@ def register(dispatcher, func, hook=None):
     if hook:
         dispatcher.hooks[hook] = func
     else:
-        sig = required_args_sig(argspec)
+        sig_full = sig_regular(argspec)
+        sig_req = sig_required(argspec)
         if argspec.varargs:
             # The presence of a catch-all variable for positional arguments
             # indicates that this function should be treated as the fallback.
@@ -64,7 +65,7 @@ def register(dispatcher, func, hook=None):
                   .format(dispatcher.name))
             dispatcher.default = func
         else:
-            for i, param in enumerate(sig):
+            for i, param in enumerate(sig_full):
                 if not inspect.isclass(param) and param is not None:
                     raise OverloadingError(
                       "Failed to overload function '{0}': parameter '{1}' has "
@@ -73,7 +74,7 @@ def register(dispatcher, func, hook=None):
             for f in dispatcher.functions:
                 if f[0] is dispatcher.default:
                     continue
-                result = sig_cmp(sig, required_args_sig(f[1]))
+                result = sig_cmp(sig_req, sig_required(f[1]))
                 if result is not False:
                     raise OverloadingError(
                       "Failed to overload function '{0}': non-unique signature [{1}]." \
@@ -81,7 +82,7 @@ def register(dispatcher, func, hook=None):
                               str.join(', ', (type_.__name__ if type_ else '<no type>'
                                               for type_ in result))))
         # All clear; register the function.
-        dispatcher.functions.append((func, argspec, sig))
+        dispatcher.functions.append((func, argspec, sig_full))
     if func.__name__ == dispatcher.name:
         # The returned function is going to be bound to the invocation name
         # in the calling scope, so keep returning the dispatcher.
@@ -91,7 +92,7 @@ def register(dispatcher, func, hook=None):
 
 
 def find(dispatcher, *args, **kwargs):
-    matches = [Match((-1, 0, 0), None, None)]
+    matches = [Match((-1, 0, 0), None, None, None, None)]
     for func, argspec, sig in dispatcher.functions:
         # Filter out keyword arguments that will be consumed by a catch-all parameter
         # or by keyword-only parameters.
@@ -125,26 +126,37 @@ def find(dispatcher, *args, **kwargs):
                     arg_score, type_score, sig_score = -2, 0, 0
                     break
         score = (arg_score, type_score, sig_score)
-        matches.append(Match(score, func, sig))
+        matches.append(Match(score, func, argspec, sig, args_by_key))
     matches = sorted(matches, key=lambda m: m.score, reverse=True)
     top_matches = [m for m in matches if m.score == matches[0].score]
-    if len(top_matches) > 1:
-        # Give priority to non-default functions.
-        top_matches = [m for m in top_matches if m.func is not dispatcher.default]
     if len(top_matches) > 1:
         # The only situation where a tie should occur is if there's a parameter that
         # expects the type X in one implementation and a subclass of X in another.
         sig_len = min(len(m.sig) for m in top_matches)
         for i in range(sig_len):
             for match in top_matches:
+                if match.argspec.args[i] not in match.args_by_key:
+                    continue
                 issubclass_all = tuple(issubclass(match.sig[i], m.sig[i])
                                        for m in top_matches if m.sig[i])
                 if issubclass_all and all(issubclass_all):
                     return match.func
+    if len(top_matches) > 1:
+        # Give priority to non-default functions.
+        top_matches = [m for m in top_matches if m.func is not dispatcher.default]
+    if len(top_matches) > 1:
         raise OverloadingError("Could not resolve the most specific match. "
                                "This should not happen. Please file a bug at "
                                "https://github.com/bintoro/overloading.py/issues.")
     return top_matches[0].func
+
+
+def sig_regular(argspec):
+    return tuple(argspec.annotations.get(arg) for arg in argspec.args)
+
+
+def sig_required(argspec):
+    return tuple(argspec.annotations.get(arg) for arg in required_args(argspec))
 
 
 def required_args(argspec):
@@ -152,10 +164,6 @@ def required_args(argspec):
         return argspec.args[:-len(argspec.defaults)]
     else:
         return argspec.args
-
-
-def required_args_sig(argspec):
-    return tuple(argspec.annotations.get(arg) for arg in required_args(argspec))
 
 
 def sig_cmp(sig1, sig2):
