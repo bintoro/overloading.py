@@ -2,11 +2,20 @@
 
 ###### Function overloading for Python 3
 
-The `overloading` module provides function and method dispatching based on the type and number of runtime arguments.
+`overloading` is a module that provides function dispatching based on the types and number of runtime arguments.
+
+#### Features
+
+* Function validation upon registration and detailed resolution rules guarantee a unique, well-defined outcome at runtime.
+* Supports optional parameters in function signatures.
+* Evaluates both positional and keyword arguments when resolving the best match.
+* Supports fallback functions and execution of shared code.
+* Supports argument polymorphism.
+* Supports classes and inheritance, including classmethods and staticmethods.
 
 #### First example
 
-Original code:
+Sample code without overloading:
 
 ```python
 class DB:
@@ -17,7 +26,7 @@ class DB:
         elif len(args) == 2:
             return self.get_by_id(id=args[0], model=args[1])
         else:
-            raise TypeError()
+            raise TypeError(...)
 
     def get_by_query(self, query):
         ...
@@ -48,7 +57,9 @@ class DB:
 
 ## Usage
 
-Use the `overloaded` and `overloads` decorators to register multiple implementations of a function that differ by their parameter type or count. Argument types are specified as [annotations](https://www.python.org/dev/peps/pep-3107/).
+#### Basics
+
+Use the `overloaded` and `overloads` decorators to register multiple implementations of a function. All variants must differ by parameter type or count. Argument types are specified as [annotations](https://www.python.org/dev/peps/pep-3107/).
 
 When the overloaded function is called, the module invokes the correct implementation by finding the best match to the supplied arguments.
 
@@ -60,27 +71,21 @@ def f():
     return 'no args'
 
 @overloads(f)
+def f(foo):
+    return 'one arg of any type'
+
+@overloads(f)
 def f(foo:int, bar:int):
     return 'two ints'
 
-@overloads(f)
-def f(foo:str, bar:str):
-    return 'two strings'
-
-@overloads(f)
-def f(foo, bar):
-    return 'two args of any type'
-
 >>> f()
 'no args'
->>> f(100)
-TypeError: Invalid type or number of arguments when calling 'f'.
+>>> f('a')
+'one arg of any type'
 >>> f(100, 200)
 'two ints'
->>> f('a', 'b')
-'two strings'
 >>> f('a', 200)
-'two args of any type'
+TypeError: Invalid type or number of arguments when calling 'f'.
 ```
 
 Keyword arguments can be used as normal:
@@ -90,34 +95,24 @@ Keyword arguments can be used as normal:
 'two ints'
 ```
 
-#### Specifying a default
+#### Specifying a default handler
 
 One of the functions can be designated as a fallback that will be called in case a match is not found. This is done by including the catch-all variable for positional arguments (`*args`).
 
-```python
-@overloaded
-def f(x:str):
-    return 'string'
+Continuing with the previous example:
 
+```python
 @overloads(f)
 def f(*args, **kwargs):
     return 'default'
 
->>> f()
-'default'
->>> f('a')
-'string'
->>> f(100)
+>>> f('a', 200)
 'default'
 ```
 
-#### Errors
+#### Argument subtyping
 
-The module will raise an `OverloadingError` if something goes wrong while the functions are being registered. No avoidable errors will be raised at invocation time.
-
-#### Inheritance and arguments
-
-Subclass instances will satisfy type specifications, as one would expect:
+Subclass instances will satisfy type specifications as one would expect:
 
 ```python
 class Animal:      ...
@@ -135,7 +130,7 @@ def f(creature:Animal):
 
 #### Other decorators
 
-Feel free to overload already-decorated functions, but remember to use `functools.wraps()` so that the module can find the actual function being overloaded.
+The overloading system can be used together with other decorators, but remember to use `functools.wraps()` so that the module can find the inner function. The order in which the decorators are applied generally does not matter (but classmethods and staticmethods are a notable exception; see below).
 
 #### Usage with classes
 
@@ -153,7 +148,7 @@ class C:
         ...
 ```
 
-Classmethods and staticmethods are supported too. The only requirement is that overloading must be performed first (i.e., `classmethod` or `staticmethod` must be set as the outer decorator):
+Classmethods and staticmethods must be defined by wrapping an already-overloaded function — i.e., by using an outer decorator:
 
 ```python
 class C:
@@ -175,7 +170,7 @@ class C:
         ...
 
 class S(C):
-    @overloads(C.f)                # Observe `C.f` here.
+    @overloads(C.f)                # Note `C.f` here.
     def f(self, foo, bar, baz):
         ...
 ```
@@ -187,57 +182,22 @@ Code that should be executed no matter which implementation is called can be pla
 ```python
 @overloaded
 def f(foo):
-    print('one arg')
+    ...
 
 @overloads(f)
-def f(foo, bar):
-    print('two args')
+def g(foo, bar):
+    ...
 
 @overloads(f, 'before')
-def f(*args):
-    print('before')
+def pre(*args):
+    ...
 
 @overloads(f, 'after')
-def f(*args):
-    print('after')
-
->>> f(100)
-before
-one arg
-after
->>> f(100, 200)
-before
-two args
-after
+def post(*args):
+    ...
 ```
 
-All arguments are passed to the hook functions as well, so make sure they can accept them.
-
-#### Miscellaneous
-
-The order in which the functions are defined does not matter, and the function wrapped with the initial `overloaded` decorator is not treated any differently than the successive ones, except that it determines the name by which the overloaded function is invoked.
-
-Whether or not the other functions share the same name is of no consequence, but if they are given distinct names, they can also be called directly. A direct call will bypass the overloading mechanism, since the dispatcher is bound to the invocation name only.
-
-```python
-@overloaded
-def f(foo:str):
-    return 'f'
-
-@overloads(f)
-def g(foo):
-    return 'g'
-
->>> f(100)
-'g'
->>> f('a')
-'f'
->>> g('a')  # Bypass overloading.
-'g'
-```
-
-There are no restrictions on the kinds of parameters a function signature may contain. However, the argument matching algorithm only examines regular parameters (those before `*` or `*args` if present). In other words, arguments consumed by catch-all variables or Py3-style keyword-only arguments do not count towards match quality.
-
+The call `f(1, 2)` would now be equivalent to `pre(1, 2); g(1, 2); post(1, 2);`.
 
 ## Details
 
@@ -248,7 +208,7 @@ The dispatching logic is intended to be robust with no surprises. The resolution
 
 Function signatures are validated at registration time to ensure that an ambiguous situation can never arise at runtime. Specifically, **the sequence of required parameters must form a unique signature**.
 
-For example, attempting the following definitions will raise an error because `bar`, although it varies by type, is not a required parameter and therefore not considered part of the identifying signature.
+For example, attempting the following definitions will raise an error because `bar`, although it varies on type, is not a required parameter and therefore not considered part of the identifying signature.
 
 ```python
 @overloaded
@@ -273,17 +233,56 @@ def f(foo, bar:str):    # `bar` no longer optional
 
 >>> f('a')
 'any, int'
->>> f('a', 200)
-'any, int'
 >>> f('a', 'b')
 'any, str'
 ```
 
-There is one exception to the signature uniqueness requirement. The default implementation is allowed to have a signature that also appears elsewhere. Thus, `f()` and `f(*args)` are permitted at the same time. To prevent conflicts, the default function always takes a lower priority if it matches with the same specificity as another function.
+There is one exception to the signature uniqueness requirement. The default implementation is allowed to have a signature that also appears elsewhere. Thus, `f()` and `f(*args)` are permitted at the same time. To prevent conflicts, the default function takes a lower priority when needed.
 
-#### More on optional parameters
+#### Resolution rules
 
-Even though optional parameters are ignored when assessing signature uniqueness, they do matter at invocation time when the actual argument matching is carried out. Here is an artificial example that demonstrates this:
+The most specific match between a set of arguments and a group of function signatures is determined by applying the following rules until a single function remains:
+
+1.  Filter out any functions that cause a mismatch based on argument type, count, or name.
+2.  Pick the function that accepts the most arguments to fill its regular parameter slots.
+3.  Pick the function whose signature matches the most argument types.
+4.  Pick the function with the greatest number of exact matches in the previous step (as opposed to matches due to subtyping).
+5.  Pick the function with an exactly matching type at the earliest parameter position where the competing functions do not have such a match.
+6.  Pick the function whose signature contains the greatest number of required parameters.
+7.  Pick the function that is not the default implementation.
+
+#### Errors
+
+The module will raise an `OverloadingError` if something goes wrong while the functions are being registered, with the intention that no avoidable errors would have to be raised at invocation time.
+
+#### Miscellaneous
+
+The function wrapped with the initial `overloaded` decorator is not treated any differently than the successive ones, except that it determines the name by which the overloaded function is invoked.
+
+Whether or not the other functions share the same name is of no consequence, but if they are given distinct names, they can also be called directly. A direct call will bypass the overloading mechanism, since the dispatcher is bound to the invocation name only.
+
+```python
+@overloaded
+def f(foo:str):
+    return 'f'
+
+@overloads(f)
+def g(foo):
+    return 'g'
+
+>>> f(100)
+'g'
+>>> f('a')
+'f'
+>>> g('a')  # Bypass overloading.
+'g'
+```
+
+There are no restrictions on the kinds of parameters a function signature may contain. However, the argument matching algorithm only examines regular parameters (those before `*` or `*args` if present). In other words, arguments consumed by catch-all variables or Py3-style keyword-only arguments do not count towards match quality.
+
+#### Advanced example: Optional parameters
+
+Even though optional parameters are ignored when assessing signature uniqueness, they do matter at invocation time when the actual argument matching is carried out.
 
 ```python
 @overloaded
@@ -322,9 +321,9 @@ def i(foo:int=None, bar=None, baz=None, **kwargs): ...
 ````
 then `f(100)` would resolve to `i(100)` instead. This is because a type-based match always takes precedence.
 
-#### Limitations on argument inheritance
+#### Advanced example: Argument subtyping
 
-While a subclass/superclass distinction is allowed to serve as the only differentiating aspect between two signatures, there can be at most one such parameter. To see why, consider a case like this:
+Consider a case like this:
 
 ```python
 class Animal:      ...
@@ -342,18 +341,5 @@ def f(creature:Animal, thing:Car):
     ...
 ```
 
-Calling `f(Dog(), Car())` would now result in an equally explicit match with regard to both functions; one argument would match directly and the other via inheritance.
-
-This limitation may be relaxed in the future once the validation algorithm is equipped to recognize cases that are not susceptible to this problem.
-
-#### Resolution rules
-
-The most specific match between a set of arguments and a group of function signatures is determined by applying the following rules until a single function remains:
-
-1.  Filter out any functions that cause a mismatch based on argument type, count, or name.
-2.  Pick the function that accepts the most arguments to fill its regular parameter slots.
-3.  Pick the function whose signature matches the greatest number of argument types.
-4.  Pick the function whose signature contains the greatest number of required parameters.
-5.  Pick the function that provides the most explicit match in terms of inheritance (i.e., one that specifies a subclass rather than a superclass).
-6.  Pick the function that is not the default implementation.
+Calling `f(Dog(), Car())` would seem to result in an equally explicit match with regard to both functions; one of the arguments matches exactly and the other due to inheritance. The resolution rules address this by directing that the first parameter to match exactly will determine the winner. Therefore in this case the first function would be invoked.
 
