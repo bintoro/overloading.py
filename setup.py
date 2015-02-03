@@ -2,7 +2,7 @@ from setuptools import setup
 
 setup(
     name = 'overloading',
-    version = '0.3.0',
+    version = '0.4.0',
     description = 'Function overloading for Python 3',
     long_description = 'https://github.com/bintoro/overloading.py',
     url = 'https://github.com/bintoro/overloading.py',
