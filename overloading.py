@@ -50,7 +50,7 @@ def register(dispatcher, func, hook=None):
         dispatcher.hooks[hook] = func
     else:
         sig_full = sig_regular(argspec)
-        sig_req = sig_required(argspec)
+        sig_rqd = sig_required(argspec)
         if argspec.varargs:
             # The presence of a catch-all variable for positional arguments
             # indicates that this function should be treated as the fallback.
@@ -70,14 +70,17 @@ def register(dispatcher, func, hook=None):
             for f in dispatcher.functions:
                 if f[0] is dispatcher.default:
                     continue
-                # result = sig_cmp(sig_req, sig_required(f[1]))
-                result = sig_req if sig_req == sig_required(f[1]) else False
-                if result is not False:
-                    raise OverloadingError(
-                      "Failed to overload function '{0}': non-unique signature [{1}]." \
-                      .format(dispatcher.name,
-                              str.join(', ', (type_.__name__ if type_ else '<no type>'
-                                              for type_ in result))))
+                duplicate = sig_cmp(sig_rqd, sig_required(f[1]))
+                if duplicate is not False:
+                    if isinstance(duplicate, tuple):
+                        msg = "non-unique signature [%s]." % \
+                                str.join(', ', (type_.__name__ if type_ else '<no type>'
+                                                for type_ in duplicate))
+                    else:
+                        msg = "multiple function signatures specify an abstract " \
+                              "base class at parameter position %d" % duplicate
+                    raise OverloadingError("Failed to overload function '{0}': {1}" \
+                                           .format(dispatcher.name, msg))
         # All clear; register the function.
         dispatcher.functions.append((func, argspec, sig_full))
     if func.__name__ == dispatcher.name:
@@ -89,7 +92,6 @@ def register(dispatcher, func, hook=None):
 
 
 Match = namedtuple('Match', 'score, func')
-
 
 def find(dispatcher, *args, **kwargs):
     matches = [Match((-1,), None)]
@@ -115,7 +117,7 @@ def find(dispatcher, *args, **kwargs):
         arg_score = arg_count # >= 0
         type_score = 0
         exact_score = 0
-        exact_positions = [0] * arg_count
+        mro_scores = [0] * arg_count
         sig_score = required_count
         args_by_key = {argspec.args[idx]: val for (idx, val) in enumerate(args)}
         args_by_key.update(true_kwargs)
@@ -126,15 +128,26 @@ def find(dispatcher, *args, **kwargs):
                     type_score += 1
                     if type(value) is expected_type:
                         exact_score += 1
-                        exact_positions[argspec.args.index(argname)] = 1
+                    # Compute a rank for how close the match is in terms of
+                    # the type hierarchy.
+                    try:
+                        mro_index = type(value).__mro__.index(expected_type)
+                    except ValueError:
+                        # The expected type was not part of the MRO. This can only
+                        # happen when the type has a metaclass with a custom
+                        # implementation of `__instancecheck__`. For now, deal with
+                        # it by simply giving the match a low rank.
+                        mro_index = 99
+                    mro_scores[argspec.args.index(argname)] = -mro_index
                 else:
                     # Discard immediately on type mismatch.
                     arg_score = -2
                     break
-        score = (arg_score, type_score, exact_score, exact_positions, sig_score)
+        score = (arg_score, type_score, exact_score, mro_scores, sig_score)
         matches.append(Match(score, func))
     matches = sorted(matches, key=lambda m: m.score, reverse=True)
     top_matches = [m for m in matches if m.score == matches[0].score]
+    # print(tuple((m.func.__name__, m.score) for m in matches if m.func))
     if len(top_matches) > 1:
         # Give priority to non-default functions.
         top_matches = [m for m in top_matches if m.func is not dispatcher.default]
@@ -158,6 +171,31 @@ def required_args(argspec):
         return argspec.args[:-len(argspec.defaults)]
     else:
         return argspec.args
+
+
+def sig_cmp(sig1, sig2):
+    """
+    Compare two parameter signatures.
+    
+    The comparator considers all abstract base classes to be equal. This implies
+    that two function signatures may not contain an ABC at the same parameter position,
+    or else they will be considered duplicates.
+    
+    If the signatures represent an exact match, return the shared signature.
+    If they match because of the ABC rule, return an integer indicating the position
+    of the parameter in question. On mismatch return `False`.
+    """
+    sig = []
+    if len(sig1) != len(sig2):
+        return False
+    for idx, (type1, type2) in enumerate(zip(sig1, sig2)):
+        if type1 is type2:
+            sig.append(type1)
+        elif inspect.isabstract(type1) and inspect.isabstract(type2):
+            return idx
+        else:
+            return False
+    return tuple(sig)
 
 
 def error(name, *args, **kwargs):

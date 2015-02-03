@@ -1,3 +1,4 @@
+import collections
 from functools import wraps
 
 import pytest
@@ -17,7 +18,10 @@ class X(metaclass=M):
 class Y(X):
     pass
 
-x, y = X(), Y()
+class Z(Y):
+    pass
+
+x, y, z = X(), Y(), Z()
 
 
 def test_basic():
@@ -232,6 +236,17 @@ def test_arg_subtyping_1():
     assert f(x, 1) == ('X', 'any')
     assert f(y, 1) == ('Y', 'any')
 
+    @overloaded
+    def f(foo:collections.Iterable):
+        return ('Iterable')
+
+    @overloads(f)
+    def f(arg:dict):
+        return ('dict')
+
+    assert f([1, 2, 3]) == ('Iterable')
+    assert f(collections.defaultdict()) == ('dict')
+
 
 def test_arg_subtyping_2():
 
@@ -259,6 +274,37 @@ def test_arg_subtyping_3():
         return ('Y', 'X')
 
     assert f(1, y, y) == ('Y', 'X')
+
+
+def test_arg_subtyping_4():
+
+    @overloaded
+    def f(foo:int, bar:X, baz:X):
+        return ('int', 'X', 'X')
+
+    @overloads(f)
+    def f(foo:int, bar:X, baz:Y):
+        return ('int', 'X', 'Y')
+
+    @overloads(f)
+    def f(foo:int, bar:Y, baz:X):
+        return ('int', 'Y', 'X')
+
+    assert f(1, z, z) == ('int', 'Y', 'X')
+
+    @overloaded
+    def f(foo:X, bar:X, baz:X, quux:X):
+        return ('X', 'X', 'X', 'X')
+
+    @overloads(f)
+    def f(foo:Z, bar:X, baz:Y, quux:Y):
+        return ('Z', 'X', 'Y', 'Y')
+
+    @overloads(f)
+    def f(foo:Y, bar:Z, baz:X, quux:Z):
+        return ('Y', 'Z', 'X', 'Z')
+
+    assert f(z, z, z, z) == ('Y', 'Z', 'X', 'Z')
 
 
 def test_named():
