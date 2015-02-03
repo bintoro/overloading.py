@@ -6,7 +6,6 @@
 
 from collections import namedtuple
 from functools import partial, wraps
-from itertools import chain
 import inspect
 import sys
 
@@ -14,9 +13,6 @@ if sys.version_info[0] < 3:
     raise Exception("Module 'overloading' requires Python version 3.0 or higher.")
 
 __all__ = ['overloaded', 'overloads']
-
-
-Match = namedtuple('Match', 'score, func, argspec, sig, args_by_key')
 
 
 def overloaded(func):
@@ -74,7 +70,8 @@ def register(dispatcher, func, hook=None):
             for f in dispatcher.functions:
                 if f[0] is dispatcher.default:
                     continue
-                result = sig_cmp(sig_req, sig_required(f[1]))
+                # result = sig_cmp(sig_req, sig_required(f[1]))
+                result = sig_req if sig_req == sig_required(f[1]) else False
                 if result is not False:
                     raise OverloadingError(
                       "Failed to overload function '{0}': non-unique signature [{1}]." \
@@ -91,8 +88,11 @@ def register(dispatcher, func, hook=None):
         return func
 
 
+Match = namedtuple('Match', 'score, func')
+
+
 def find(dispatcher, *args, **kwargs):
-    matches = [Match((-1, 0, 0), None, None, None, None)]
+    matches = [Match((-1,), None)]
     for func, argspec, sig in dispatcher.functions:
         # Filter out keyword arguments that will be consumed by a catch-all parameter
         # or by keyword-only parameters.
@@ -114,33 +114,27 @@ def find(dispatcher, *args, **kwargs):
             continue
         arg_score = arg_count # >= 0
         type_score = 0
+        exact_score = 0
+        exact_positions = [0] * arg_count
         sig_score = required_count
         args_by_key = {argspec.args[idx]: val for (idx, val) in enumerate(args)}
-        for argname, value in chain(args_by_key.items(), true_kwargs.items()):
+        args_by_key.update(true_kwargs)
+        for argname, value in args_by_key.items():
             expected_type = argspec.annotations.get(argname)
             if expected_type:
                 if isinstance(value, expected_type):
                     type_score += 1
+                    if type(value) is expected_type:
+                        exact_score += 1
+                        exact_positions[argspec.args.index(argname)] = 1
                 else:
                     # Discard immediately on type mismatch.
-                    arg_score, type_score, sig_score = -2, 0, 0
+                    arg_score = -2
                     break
-        score = (arg_score, type_score, sig_score)
-        matches.append(Match(score, func, argspec, sig, args_by_key))
+        score = (arg_score, type_score, exact_score, exact_positions, sig_score)
+        matches.append(Match(score, func))
     matches = sorted(matches, key=lambda m: m.score, reverse=True)
     top_matches = [m for m in matches if m.score == matches[0].score]
-    if len(top_matches) > 1:
-        # The only situation where a tie should occur is if there's a parameter that
-        # expects the type X in one implementation and a subclass of X in another.
-        sig_len = min(len(m.sig) for m in top_matches)
-        for i in range(sig_len):
-            for match in top_matches:
-                if match.argspec.args[i] not in match.args_by_key:
-                    continue
-                issubclass_all = tuple(issubclass(match.sig[i], m.sig[i])
-                                       for m in top_matches if m.sig[i])
-                if issubclass_all and all(issubclass_all):
-                    return match.func
     if len(top_matches) > 1:
         # Give priority to non-default functions.
         top_matches = [m for m in top_matches if m.func is not dispatcher.default]
@@ -166,36 +160,9 @@ def required_args(argspec):
         return argspec.args
 
 
-def sig_cmp(sig1, sig2):
-    """
-    Compare two parameter signatures. If they match, return the shared signature.
-    On mismatch return `False`. Inheritance can serve as a distinguishing factor
-    for up to one parameter, but for subsequent occurrences the comparator considers 
-    a class and its subclass to be equal. The returned signature is normalized to always
-    include the superclass.
-    """
-    sig = []
-    subclass_count = 0
-    if len(sig1) != len(sig2):
-        return False
-    for type1, type2 in zip(sig1, sig2):
-        if type1 is type2:
-            sig.append(type1)
-        elif type1 and type2 \
-          and (issubclass(type1, type2) or issubclass(type2, type1)):
-            sig.append(type1 if type1 in type2.__mro__ else type2)
-            subclass_count += 1
-        else:
-            return False
-    if subclass_count == 1:
-        return False
-    else:
-        return tuple(sig)
-
-
 def error(name, *args, **kwargs):
-    raise TypeError("Invalid type or number of arguments when calling overloaded "
-                    "function{0}.".format(" '%s'" % name if name else ''))
+    raise TypeError("Invalid type or number of arguments{0}."\
+                    .format(" when calling '%s'" % name if name else ''))
 
 
 def no_op(*args, **kwargs):

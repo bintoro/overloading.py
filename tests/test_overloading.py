@@ -219,7 +219,7 @@ def test_nodefault():
         f(1, 2, 3)
 
 
-def test_arg_subclasses_1():
+def test_arg_subtyping_1():
 
     @overloaded
     def f(foo:X, bar):
@@ -233,7 +233,7 @@ def test_arg_subclasses_1():
     assert f(y, 1) == ('Y', 'any')
 
 
-def test_arg_subclasses_2():
+def test_arg_subtyping_2():
 
     @overloaded
     def f(foo, bar:X=None):
@@ -246,6 +246,19 @@ def test_arg_subclasses_2():
     assert f(1)    == ('any', 'X')
     assert f(1, x) == ('any', 'X')
     assert f(1, y) == ('any', 'Y')
+
+
+def test_arg_subtyping_3():
+
+    @overloaded
+    def f(n:int, foo:X, bar:Y):
+        return ('X', 'Y')
+
+    @overloads(f)
+    def f(n:int, foo:Y, bar:X):
+        return ('Y', 'X')
+
+    assert f(1, y, y) == ('Y', 'X')
 
 
 def test_named():
@@ -449,15 +462,6 @@ def test_errors():
             pass
         @overloads(f)
         def f(foo:int, bar):
-            pass
-
-    # Recurring signature due to inheritance
-    with pytest.raises(OverloadingError):
-        @overloaded
-        def f(foo:X, bar:X):
-            pass
-        @overloads(f)
-        def f(foo:Y, bar:Y):
             pass
 
     # Recurring `*args`
