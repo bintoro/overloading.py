@@ -7,6 +7,8 @@ from overloading import *
 from overloading import OverloadingError
 
 
+rounds = 100
+
 a, b, c, d, w = 'a', 'b', 'c', 'd', None
 
 class M(type):
@@ -54,16 +56,19 @@ def test_basic():
     def f(foo:str, bar:int, baz: X):
         return ('str', 'int', 'X')
 
-    assert f()           == 'default'
-    assert f(a)          == ('any')
-    assert f(a, b)       == 'default'
-    assert f(a, b, c, d) == 'default'
-    assert f(a, 2)       == ('any', 'int')
-    assert f(a, b, c)    == ('any', 'any', 'any')
-    assert f(1, 2, c)    == ('any', 'int', 'any')
-    assert f(a, 2, c)    == ('str', 'int', 'any')
-    assert f(a, 2, x)    == ('str', 'int', 'X')
-    assert f(a, 2, y)    == ('str', 'int', 'X')
+    for _ in range(rounds):
+        assert f()           == 'default'
+        assert f(a)          == ('any')
+        assert f(a, b)       == 'default'
+        assert f(a, b, c, d) == 'default'
+        assert f(a, 2)       == ('any', 'int')
+        assert f(a, b, c)    == ('any', 'any', 'any')
+        assert f(1, 2, c)    == ('any', 'int', 'any')
+        assert f(a, 2, c)    == ('str', 'int', 'any')
+        assert f(a, 2, x)    == ('str', 'int', 'X')
+        assert f(a, 2, y)    == ('str', 'int', 'X')
+
+    assert len(f.cache) == 10
 
 
 def test_kwargs_1():
@@ -84,18 +89,21 @@ def test_kwargs_1():
     def f(foo, bar=None, baz:int=None):
         return ('any', 'any?', 'int?')
 
-    assert f(a, b, c, d)        == 'default'
-    assert f(a, b, c, u=1)      == 'default'
-    assert f(a, b, u=1)         == 'default'
-    assert f(a, 2)              == ('any', 'int')
-    assert f(a, bar=2)          == ('any', 'int')
-    assert f(a, b)              == ('any', 'any', 'any?')
-    assert f(foo=a, bar=b)      == ('any', 'any', 'any?')
-    assert f(a, b, c)           == ('any', 'any', 'any?')
-    assert f(a, 2, baz=a)       == ('any', 'any', 'any?')
-    assert f(a, 2, baz=1)       == ('any', 'any?', 'int?')
-    assert f(a,    baz=1)       == ('any', 'any?', 'int?')
-    assert f(a, 2, baz=1, u=1)  == 'default'
+    for _ in range(rounds):
+        assert f(a, b, c, d)        == 'default'
+        assert f(a, b, c, u=1)      == 'default'
+        assert f(a, b, u=1)         == 'default'
+        assert f(a, 2)              == ('any', 'int')
+        assert f(a, bar=2)          == ('any', 'int')
+        assert f(a, b)              == ('any', 'any', 'any?')
+        assert f(foo=a, bar=b)      == ('any', 'any', 'any?')
+        assert f(a, b, c)           == ('any', 'any', 'any?')
+        assert f(a, 2, baz=a)       == ('any', 'any', 'any?')
+        assert f(a, 2, baz=1)       == ('any', 'any?', 'int?')
+        assert f(a,    baz=1)       == ('any', 'any?', 'int?')
+        assert f(a, 2, baz=1, u=1)  == 'default'
+
+    assert len(f.cache) == 12
 
 
 def test_kwargs_2():
@@ -116,19 +124,22 @@ def test_kwargs_2():
     def f(foo, bar=None, baz:int=None, **kwargs):
         return ('any', 'any?', 'int?', 'varkw')
 
-    assert f(a, b, c, d)       == 'default'
-    assert f(a, b, c, u=1)     == 'default'
-    assert f(a, b, u=1)        == ('any', 'any?', 'int?', 'varkw')
-    assert f(a, 2)             == ('any', 'any', 'any?')
-    assert f(a, bar=2)         == ('any', 'any', 'any?')
-    assert f(a, bar=b)         == ('any', 'any', 'any?')
-    assert f(a, b, c)          == ('any', 'any', 'any?')
-    assert f(a, 2, baz=a)      == ('any', 'any', 'any?')
-    assert f(a, 2, baz=a, u=1) == 'default'
-    assert f(a, 2, baz=1, u=1) == ('any', 'any?', 'int?', 'varkw')
-    assert f(a, u=1)           == ('any', 'any?', 'int?', 'varkw')
-    assert f(foo=a, u=1)       == ('any', 'any?', 'int?', 'varkw')
-    assert f(u=1, v=1)         == 'varkw'
+    for _ in range(rounds):
+        assert f(a, b, c, d)       == 'default'
+        assert f(a, b, c, u=1)     == 'default'
+        assert f(a, b, u=1)        == ('any', 'any?', 'int?', 'varkw')
+        assert f(a, 2)             == ('any', 'any', 'any?')
+        assert f(a, bar=2)         == ('any', 'any', 'any?')
+        assert f(a, bar=b)         == ('any', 'any', 'any?')
+        assert f(a, b, c)          == ('any', 'any', 'any?')
+        assert f(a, 2, baz=a)      == ('any', 'any', 'any?')
+        assert f(a, 2, baz=a, u=1) == 'default'
+        assert f(a, 2, baz=1, u=1) == ('any', 'any?', 'int?', 'varkw')
+        assert f(a, u=1)           == ('any', 'any?', 'int?', 'varkw')
+        assert f(foo=a, u=1)       == ('any', 'any?', 'int?', 'varkw')
+        assert f(u=1, v=1)         == 'varkw'
+
+    assert len(f.cache) == 13
 
 
 def test_kwargs_3():
@@ -145,8 +156,9 @@ def test_kwargs_3():
     def f(foo, bar:int, baz=None, quux=None):
         return ('any', 'int', 'any?', 'any?')
 
-    assert f(a, 2)        == ('str', 'int', 'varkw')
-    assert f(a, 2, baz=a) == ('any', 'int', 'any?', 'any?')
+    for _ in range(rounds):
+        assert f(a, 2)        == ('str', 'int', 'varkw')
+        assert f(a, 2, baz=a) == ('any', 'int', 'any?', 'any?')
 
 
 def test_kwonlyargs():
@@ -159,7 +171,10 @@ def test_kwonlyargs():
     def f(foo:str, bar:int, *, kwonly):
         return ('str', 'int')
 
-    assert f(a, 2, kwonly=3) == ('str', 'int')
+    for _ in range(rounds):
+        assert f(a, 2, kwonly=3) == ('str', 'int')
+
+    assert len(f.cache) == 1
 
 
 def test_default_1():
@@ -184,11 +199,14 @@ def test_default_1():
     def f(foo, bar):
         return ('any', 'any')
 
-    assert f()           == 'empty'
-    assert f(a)          == ('any')
-    assert f(1)          == ('int')
-    assert f(a, b)       == ('any', 'any')
-    assert f(a, b, c)    == 'default'
+    for _ in range(rounds):
+        assert f()           == 'empty'
+        assert f(a)          == ('any')
+        assert f(1)          == ('int')
+        assert f(a, b)       == ('any', 'any')
+        assert f(a, b, c)    == 'default'
+
+    assert len(f.cache) == 5
 
 
 def test_default_2():
@@ -201,8 +219,11 @@ def test_default_2():
     def f():
         return 'empty'
 
-    assert f()  == 'empty'
-    assert f(1) == 'default'
+    for _ in range(rounds):
+        assert f()  == 'empty'
+        assert f(1) == 'default'
+
+    assert len(f.cache) == 2
 
 
 def test_nodefault():
@@ -215,12 +236,15 @@ def test_nodefault():
     def f(foo, bar):
         return ('any', 'any')
 
-    with pytest.raises(TypeError):
-        f()
-    assert f(1)    == ('any')
-    assert f(1, 2) == ('any', 'any')
-    with pytest.raises(TypeError):
-        f(1, 2, 3)
+    for _ in range(rounds):
+        with pytest.raises(TypeError):
+            f()
+        assert f(1)    == ('any')
+        assert f(1, 2) == ('any', 'any')
+        with pytest.raises(TypeError):
+            f(1, 2, 3)
+
+    assert len(f.cache) == 2
 
 
 def test_arg_subtyping_1():
@@ -244,8 +268,9 @@ def test_arg_subtyping_1():
     def f(arg:dict):
         return ('dict')
 
-    assert f([1, 2, 3]) == ('Iterable')
-    assert f(collections.defaultdict()) == ('dict')
+    for _ in range(rounds):
+        assert f([1, 2, 3]) == ('Iterable')
+        assert f(collections.defaultdict()) == ('dict')
 
 
 def test_arg_subtyping_2():
@@ -258,9 +283,10 @@ def test_arg_subtyping_2():
     def f(foo, bar:Y=None, *args):
         return ('any', 'Y')
 
-    assert f(1)    == ('any', 'X')
-    assert f(1, x) == ('any', 'X')
-    assert f(1, y) == ('any', 'Y')
+    for _ in range(rounds):
+        assert f(1)    == ('any', 'X')
+        assert f(1, x) == ('any', 'X')
+        assert f(1, y) == ('any', 'Y')
 
 
 def test_arg_subtyping_3():
@@ -273,7 +299,8 @@ def test_arg_subtyping_3():
     def f(n:int, foo:Y, bar:X):
         return ('Y', 'X')
 
-    assert f(1, y, y) == ('Y', 'X')
+    for _ in range(rounds):
+        assert f(1, y, y) == ('Y', 'X')
 
 
 def test_arg_subtyping_4():
@@ -290,7 +317,8 @@ def test_arg_subtyping_4():
     def f(foo:int, bar:Y, baz:X):
         return ('int', 'Y', 'X')
 
-    assert f(1, z, z) == ('int', 'Y', 'X')
+    for _ in range(rounds):
+        assert f(1, z, z) == ('int', 'Y', 'X')
 
     @overloaded
     def f(foo:X, bar:X, baz:X, quux:X):
@@ -304,7 +332,8 @@ def test_arg_subtyping_4():
     def f(foo:Y, bar:Z, baz:X, quux:Z):
         return ('Y', 'Z', 'X', 'Z')
 
-    assert f(z, z, z, z) == ('Y', 'Z', 'X', 'Z')
+    for _ in range(rounds):
+        assert f(z, z, z, z) == ('Y', 'Z', 'X', 'Z')
 
 
 def test_named():
@@ -321,13 +350,14 @@ def test_named():
     def h(foo, bar):
         return ('any', 'any')
 
-    assert f(a, b, c) == 'default'
-    assert f(a, 2)    == ('any', 'int')
-    assert f(a, b)    == ('any', 'any')
-    assert g(w, w)    == ('any', 'int')
-    assert h(w, w)    == ('any', 'any')
-    with pytest.raises(TypeError):
-        h(w)
+    for _ in range(rounds):
+        assert f(a, b, c) == 'default'
+        assert f(a, 2)    == ('any', 'int')
+        assert f(a, b)    == ('any', 'any')
+        assert g(w, w)    == ('any', 'int')
+        assert h(w, w)    == ('any', 'any')
+        with pytest.raises(TypeError):
+            h(w)
 
 
 def test_hooks():
@@ -359,9 +389,10 @@ def test_hooks():
     def f(foo, bar):
         called.append(('any', 'any'))
 
-    test(f, (a,  ), ['before', 'default', 'after'])
-    test(f, (a, b), ['before', ('any', 'any'), 'after'])
-    test(f, (a, 2), ['before', ('any', 'int'), 'after'])
+    for _ in range(rounds):
+        test(f, (a,  ), ['before', 'default', 'after'])
+        test(f, (a, b), ['before', ('any', 'any'), 'after'])
+        test(f, (a, 2), ['before', ('any', 'int'), 'after'])
 
 
 def test_classes():
@@ -381,9 +412,10 @@ def test_classes():
             return ('any', 'any')
 
     inst = C()
-    assert inst.f(a, b, c) == 'default'
-    assert inst.f(a, 2)    == ('any', 'int')
-    assert inst.f(a, b)    == ('any', 'any')
+    for _ in range(rounds):
+        assert inst.f(a, b, c) == 'default'
+        assert inst.f(a, 2)    == ('any', 'int')
+        assert inst.f(a, b)    == ('any', 'any')
 
     class S(C):
 
@@ -392,8 +424,9 @@ def test_classes():
             return ('any', 'any', 'any')
 
     inst = S()
-    assert inst.f(a, b)    == ('any', 'any')
-    assert inst.f(a, b, c) == ('any', 'any', 'any')
+    for _ in range(rounds):
+        assert inst.f(a, b)    == ('any', 'any')
+        assert inst.f(a, b, c) == ('any', 'any', 'any')
 
 
 def test_classmethods():
@@ -415,9 +448,10 @@ def test_classmethods():
         def f(cls, foo, bar):
             return ('any', 'any')
 
-    assert C.f(a, b, c) == 'default'
-    assert C.f(a, 2)    == ('any', 'int')
-    assert C.f(a, b)    == ('any', 'any')
+    for _ in range(rounds):
+        assert C.f(a, b, c) == 'default'
+        assert C.f(a, 2)    == ('any', 'int')
+        assert C.f(a, b)    == ('any', 'any')
 
 
 def test_staticmethods():
@@ -439,9 +473,10 @@ def test_staticmethods():
         def f(foo, bar):
             return ('any', 'any')
 
-    assert C.f(a, b, c) == 'default'
-    assert C.f(a, 2)    == ('any', 'int')
-    assert C.f(a, b)    == ('any', 'any')
+    for _ in range(rounds):
+        assert C.f(a, b, c) == 'default'
+        assert C.f(a, 2)    == ('any', 'int')
+        assert C.f(a, b)    == ('any', 'any')
 
 
 def test_decorated():
@@ -476,12 +511,13 @@ def test_decorated():
     def h(foo:int, bar:int):
         return ('int', 'int')
 
-    assert f(a, b, c) == 'default'
-    assert f(a, 2)    == ('any', 'int')
-    assert f(a, b)    == ('any', 'any')
-    assert f(1, b)    == ('int', 'any')
-    assert f(1, 2)    == ('int', 'int')
-    assert g(w, w)    == ('int', 'any')
+    for _ in range(rounds):
+        assert f(a, b, c) == 'default'
+        assert f(a, 2)    == ('any', 'int')
+        assert f(a, b)    == ('any', 'any')
+        assert f(1, b)    == ('int', 'any')
+        assert f(1, 2)    == ('int', 'int')
+        assert g(w, w)    == ('int', 'any')
 
 
 def test_errors():

@@ -18,10 +18,20 @@ __all__ = ['overloaded', 'overloads']
 def overloaded(func):
     name = getattr(func, '__name__', None)
     def dispatcher(*args, **kwargs):
-        default = dispatcher.default or partial(error, name)
-        resolved = find(dispatcher, *args, **kwargs) or default
-        before = dispatcher.hooks.get('before', no_op)
-        after = dispatcher.hooks.get('after', no_op)
+        hashable = (tuple(type(arg) for arg in args),
+                    tuple(sorted((name, type(arg)) for (name, arg) in kwargs.items())))
+        resolved = dispatcher.cache.get(hashable)
+        if not resolved:
+            resolved = find(dispatcher, args, kwargs) or dispatcher.default
+            if resolved:
+                dispatcher.cache[hashable] = resolved
+        if resolved:
+            before = dispatcher.hooks.get('before', no_op)
+            after = dispatcher.hooks.get('after', no_op)
+        else:
+            resolved = partial(error, name)
+            before = no_op
+            after = no_op
         before(*args, **kwargs)
         result = resolved(*args, **kwargs)
         after(*args, **kwargs)
@@ -30,6 +40,7 @@ def overloaded(func):
     dispatcher.hooks = {}
     dispatcher.default = None
     dispatcher.name = name
+    dispatcher.cache = {}
     return register(dispatcher, func)
 
 
@@ -93,17 +104,15 @@ def register(dispatcher, func, hook=None):
 
 Match = namedtuple('Match', 'score, func')
 
-def find(dispatcher, *args, **kwargs):
+def find(dispatcher, args, kwargs):
     matches = [Match((-1,), None)]
     for func, argspec, sig in dispatcher.functions:
         # Filter out keyword arguments that will be consumed by a catch-all parameter
         # or by keyword-only parameters.
-        if argspec.varkw:
+        if argspec.varkw or argspec.kwonlyargs:
             true_kwargs = {kw: kwargs[kw] for kw in argspec.args if kw in kwargs}
         else:
             true_kwargs = kwargs
-            for kw in argspec.kwonlyargs:
-                true_kwargs.pop(kw, None)
         arg_count = len(args) + len(true_kwargs)
         optional_count = len(argspec.defaults) if argspec.defaults else 0
         required_count = len(argspec.args) - optional_count
@@ -117,7 +126,7 @@ def find(dispatcher, *args, **kwargs):
         arg_score = arg_count # >= 0
         type_score = 0
         exact_score = 0
-        mro_scores = [0] * arg_count
+        mro_scores = [0] * len(sig)
         sig_score = required_count
         args_by_key = {argspec.args[idx]: val for (idx, val) in enumerate(args)}
         args_by_key.update(true_kwargs)
