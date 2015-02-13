@@ -26,16 +26,16 @@ def overloaded(func):
             if resolved:
                 dispatcher.cache[hashable] = resolved
         if resolved:
-            before = dispatcher.hooks.get('before', no_op)
-            after = dispatcher.hooks.get('after', no_op)
+            before = dispatcher.hooks.get('before')
+            after = dispatcher.hooks.get('after')
+            if before:
+                before(*args, **kwargs)
+            result = resolved(*args, **kwargs)
+            if after:
+                after(*args, **kwargs)
+            return result
         else:
-            resolved = partial(error, name)
-            before = no_op
-            after = no_op
-        before(*args, **kwargs)
-        result = resolved(*args, **kwargs)
-        after(*args, **kwargs)
-        return result
+            return error(name)
     dispatcher.functions = []
     dispatcher.hooks = {}
     dispatcher.default = None
@@ -207,7 +207,7 @@ def sig_cmp(sig1, sig2):
     return tuple(sig)
 
 
-def error(name, *args, **kwargs):
+def error(name):
     raise TypeError("Invalid type or number of arguments{0}."\
                     .format(" when calling '%s'" % name if name else ''))
 
