@@ -367,7 +367,7 @@ def test_hooks():
     def test(func, args, expected):
         func(*args)
         assert called == expected
-        called.clear()
+        del called[:]
 
     @overloaded
     def f(*args):
