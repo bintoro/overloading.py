@@ -25,18 +25,17 @@ def overloaded(func):
         true_func = func.__func__
     else:
         true_func = func
-    invocation_name = true_func.__name__
     def dispatcher(*args, **kwargs):
-        hashable = (tuple(type(arg) for arg in args),
-                    tuple(sorted((name, type(arg)) for (name, arg) in kwargs.items())))
-        resolved = dispatcher.cache.get(hashable)
+        cache_key = (tuple(type(arg) for arg in args),
+                     tuple(sorted((name, type(arg)) for (name, arg) in kwargs.items())))
+        resolved = dispatcher.__cache.get(cache_key)
         if not resolved:
-            resolved = find(dispatcher, args, kwargs) or dispatcher.default
+            resolved = find(dispatcher, args, kwargs) or dispatcher.__default
             if resolved:
-                dispatcher.cache[hashable] = resolved
+                dispatcher.__cache[cache_key] = resolved
         if resolved:
-            before = dispatcher.hooks.get('before')
-            after = dispatcher.hooks.get('after')
+            before = dispatcher.__hooks.get('before')
+            after = dispatcher.__hooks.get('after')
             if before:
                 before(*args, **kwargs)
             result = resolved(*args, **kwargs)
@@ -44,12 +43,13 @@ def overloaded(func):
                 after(*args, **kwargs)
             return result
         else:
-            return error(invocation_name)
-    dispatcher.functions = []
-    dispatcher.hooks = {}
-    dispatcher.default = None
-    dispatcher.name = invocation_name
-    dispatcher.cache = {}
+            return error(dispatcher.__name__)
+    dispatcher.__dict__.update(
+        __functions = [],
+        __hooks = {},
+        __default = None,
+        __cache = {},
+    )
     for attr in ('__module__', '__name__', '__qualname__', '__doc__'):
         setattr(dispatcher, attr, getattr(true_func, attr, None))
     return register(dispatcher, func)
@@ -68,28 +68,28 @@ def register(dispatcher, func, hook=None):
         dispatcher = dispatcher.__func__
     argspec = inspect.getfullargspec(unwrap(func))
     if hook:
-        dispatcher.hooks[hook] = func
+        dispatcher.__hooks[hook] = func
     else:
         sig_full = sig_regular(argspec)
         sig_rqd = sig_required(argspec)
         if argspec.varargs:
             # The presence of a catch-all variable for positional arguments
             # indicates that this function should be treated as the fallback.
-            if dispatcher.default:
+            if dispatcher.__default:
                 raise OverloadingError(
                   "Failed to overload function '{0}': multiple function definitions "
-                  "contain a catch-all variable for positional arguments." \
-                  .format(dispatcher.name))
-            dispatcher.default = func
+                  "contain a catch-all variable for positional arguments."
+                  .format(dispatcher.__name__))
+            dispatcher.__default = func
         else:
             for i, param in enumerate(sig_full):
                 if not inspect.isclass(param) and param is not None:
                     raise OverloadingError(
                       "Failed to overload function '{0}': parameter '{1}' has "
-                      "an annotation that is not a type."\
-                      .format(dispatcher.name, argspec.args[i]))
-            for f in dispatcher.functions:
-                if f[0] is dispatcher.default:
+                      "an annotation that is not a type."
+                      .format(dispatcher.__name__, argspec.args[i]))
+            for f in dispatcher.__functions:
+                if f[0] is dispatcher.__default:
                     continue
                 duplicate = sig_cmp(sig_rqd, sig_required(f[1]))
                 if duplicate is not False:
@@ -100,11 +100,11 @@ def register(dispatcher, func, hook=None):
                     else:
                         msg = "multiple function signatures specify an abstract " \
                               "base class at parameter position %d" % duplicate
-                    raise OverloadingError("Failed to overload function '{0}': {1}" \
-                                           .format(dispatcher.name, msg))
+                    raise OverloadingError("Failed to overload function '{0}': {1}"
+                                           .format(dispatcher.__name__, msg))
         # All clear; register the function.
-        dispatcher.functions.append((func, argspec, sig_full))
-    if func.__name__ == dispatcher.name:
+        dispatcher.__functions.append((func, argspec, sig_full))
+    if func.__name__ == dispatcher.__name__:
         # The returned function is going to be bound to the invocation name
         # in the calling scope, so keep returning the dispatcher.
         return wrapper(dispatcher)
@@ -116,7 +116,7 @@ Match = namedtuple('Match', 'score, func')
 
 def find(dispatcher, args, kwargs):
     matches = [Match((-1,), None)]
-    for func, argspec, sig in dispatcher.functions:
+    for func, argspec, sig in dispatcher.__functions:
         # Filter out keyword arguments that will be consumed by a catch-all parameter
         # or by keyword-only parameters.
         if argspec.varkw or argspec.kwonlyargs:
@@ -169,7 +169,7 @@ def find(dispatcher, args, kwargs):
     # print(tuple((m.func.__name__, m.score) for m in matches if m.func))
     if len(top_matches) > 1:
         # Give priority to non-default functions.
-        top_matches = [m for m in top_matches if m.func is not dispatcher.default]
+        top_matches = [m for m in top_matches if m.func is not dispatcher.__default]
     if DEBUG:
         assert len(top_matches) == 1
     return top_matches[0].func

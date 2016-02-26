@@ -92,8 +92,8 @@ def test_basic():
         assert g(a)          == ('any')
         assert g(a, 2)       == ('any', 'int')
 
-    assert len(f.cache) == 10
-    assert len(g.cache) == 3
+    assert len(f.__cache) == 10
+    assert len(g.__cache) == 3
 
 
 def test_kwargs_1():
@@ -128,7 +128,7 @@ def test_kwargs_1():
         assert f(a,    baz=1)       == ('any', 'any?', 'int?')
         assert f(a, 2, baz=1, u=1)  == 'default'
 
-    assert len(f.cache) == 12
+    assert len(f.__cache) == 12
 
 
 def test_kwargs_2():
@@ -164,7 +164,7 @@ def test_kwargs_2():
         assert f(foo=a, u=1)       == ('any', 'any?', 'int?', 'varkw')
         assert f(u=1, v=1)         == 'varkw'
 
-    assert len(f.cache) == 13
+    assert len(f.__cache) == 13
 
 
 def test_kwargs_3():
@@ -199,7 +199,7 @@ def test_kwonlyargs():
     for _ in range(rounds):
         assert f(a, 2, kwonly=3) == ('str', 'int')
 
-    assert len(f.cache) == 1
+    assert len(f.__cache) == 1
 
 
 def test_default_1():
@@ -231,7 +231,7 @@ def test_default_1():
         assert f(a, b)       == ('any', 'any')
         assert f(a, b, c)    == 'default'
 
-    assert len(f.cache) == 5
+    assert len(f.__cache) == 5
 
 
 def test_default_2():
@@ -248,7 +248,7 @@ def test_default_2():
         assert f()  == 'empty'
         assert f(1) == 'default'
 
-    assert len(f.cache) == 2
+    assert len(f.__cache) == 2
 
 
 def test_nodefault():
@@ -269,7 +269,7 @@ def test_nodefault():
         with pytest.raises(TypeError):
             f(1, 2, 3)
 
-    assert len(f.cache) == 2
+    assert len(f.__cache) == 2
 
 
 def test_arg_subtyping_1():
