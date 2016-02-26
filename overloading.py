@@ -50,6 +50,8 @@ def overloaded(func):
     dispatcher.default = None
     dispatcher.name = invocation_name
     dispatcher.cache = {}
+    for attr in ('__module__', '__name__', '__qualname__', '__doc__'):
+        setattr(dispatcher, attr, getattr(true_func, attr, None))
     return register(dispatcher, func)
 
 

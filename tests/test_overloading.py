@@ -35,6 +35,8 @@ def test_basic():
     def f(*args):
         return 'default'
 
+    assert f.__name__ == 'f'
+
     @overloads(f)
     def f(foo):
         return ('any')
@@ -71,7 +73,27 @@ def test_basic():
         assert f(a, 2, x)    == ('str', 'int', 'X')
         assert f(a, 2, y)    == ('str', 'int', 'X')
 
+    @overloaded
+    def g(foo):
+        return ('any')
+
+    @overloads(g)
+    def g(*args):
+        return 'default'
+
+    @overloads(g)
+    def g(foo, bar:int):
+        return ('any', 'int')
+
+    assert g.__name__ == 'g'
+
+    for _ in range(rounds):
+        assert g()           == 'default'
+        assert g(a)          == ('any')
+        assert g(a, 2)       == ('any', 'int')
+
     assert len(f.cache) == 10
+    assert len(g.cache) == 3
 
 
 def test_kwargs_1():
