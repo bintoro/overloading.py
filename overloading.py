@@ -1,18 +1,23 @@
 """
     overloading.py -- function overloading for Python 3
-    Copyright: 2015 Kalle Tuure
+    Copyright: 2016 Kalle Tuure
     License: MIT
 """
 
 from collections import namedtuple
-from functools import partial, wraps
+from functools import partial
 import inspect
 import sys
 
-if sys.version_info[0] < 3:
-    raise Exception("Module 'overloading' requires Python version 3.0 or higher.")
+if sys.version_info < (3, 2):
+    raise Exception("Module 'overloading' requires Python version 3.2 or higher.")
+
+
+__version__ = '0.5.0'
 
 __all__ = ['overloaded', 'overloads']
+
+DEBUG = False
 
 
 def overloaded(func):
@@ -163,10 +168,8 @@ def find(dispatcher, args, kwargs):
     if len(top_matches) > 1:
         # Give priority to non-default functions.
         top_matches = [m for m in top_matches if m.func is not dispatcher.default]
-    if len(top_matches) > 1:
-        raise OverloadingError("Could not resolve the most specific match. "
-                               "This should not happen. Please file a bug at "
-                               "https://github.com/bintoro/overloading.py/issues.")
+    if DEBUG:
+        assert len(top_matches) == 1
     return top_matches[0].func
 
 
@@ -188,11 +191,11 @@ def required_args(argspec):
 def sig_cmp(sig1, sig2):
     """
     Compare two parameter signatures.
-    
+
     The comparator considers all abstract base classes to be equal. This implies
     that two function signatures may not contain an ABC at the same parameter position,
     or else they will be considered duplicates.
-    
+
     If the signatures represent an exact match, return the shared signature.
     If they match because of the ABC rule, return an integer indicating the position
     of the parameter in question. On mismatch return `False`.
@@ -211,12 +214,8 @@ def sig_cmp(sig1, sig2):
 
 
 def error(name):
-    raise TypeError("Invalid type or number of arguments{0}."\
+    raise TypeError("Invalid type or number of arguments{0}."
                     .format(" when calling '%s'" % name if name else ''))
-
-
-def no_op(*args, **kwargs):
-    pass
 
 
 class OverloadingError(Exception):

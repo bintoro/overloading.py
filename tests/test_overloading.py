@@ -3,9 +3,12 @@ from functools import wraps
 
 import pytest
 
+import overloading
 from overloading import *
 from overloading import OverloadingError
 
+
+overloading.DEBUG = True
 
 rounds = 100
 
