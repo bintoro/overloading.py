@@ -16,7 +16,11 @@ __all__ = ['overloaded', 'overloads']
 
 
 def overloaded(func):
-    name = getattr(func, '__name__', None)
+    if isinstance(func, (classmethod, staticmethod)):
+        true_func = func.__func__
+    else:
+        true_func = func
+    invocation_name = true_func.__name__
     def dispatcher(*args, **kwargs):
         hashable = (tuple(type(arg) for arg in args),
                     tuple(sorted((name, type(arg)) for (name, arg) in kwargs.items())))
@@ -35,11 +39,11 @@ def overloaded(func):
                 after(*args, **kwargs)
             return result
         else:
-            return error(name)
+            return error(invocation_name)
     dispatcher.functions = []
     dispatcher.hooks = {}
     dispatcher.default = None
-    dispatcher.name = name
+    dispatcher.name = invocation_name
     dispatcher.cache = {}
     return register(dispatcher, func)
 
@@ -49,14 +53,13 @@ def overloads(dispatcher, hook=None):
 
 
 def register(dispatcher, func, hook=None):
+    wrapper = lambda x: x
+    if isinstance(func, (classmethod, staticmethod)):
+        wrapper = type(func)
+        func = func.__func__
     if isinstance(dispatcher, (classmethod, staticmethod)):
         dispatcher = dispatcher.__func__
-    if isinstance(func, (classmethod, staticmethod)):
-        name = dispatcher.name or func.__func__.__name__
-        raise OverloadingError("Failed to overload function '{0}': "
-                               "overloading must occur before '{1}' setup." \
-                               .format(name, type(func).__name__))
-    argspec = inspect.getfullargspec(getattr(func, '__wrapped__', func))
+    argspec = inspect.getfullargspec(unwrap(func))
     if hook:
         dispatcher.hooks[hook] = func
     else:
@@ -97,9 +100,9 @@ def register(dispatcher, func, hook=None):
     if func.__name__ == dispatcher.name:
         # The returned function is going to be bound to the invocation name
         # in the calling scope, so keep returning the dispatcher.
-        return dispatcher
+        return wrapper(dispatcher)
     else:
-        return func
+        return wrapper(func)
 
 
 Match = namedtuple('Match', 'score, func')
@@ -218,4 +221,10 @@ def no_op(*args, **kwargs):
 
 class OverloadingError(Exception):
     pass
+
+
+def unwrap(func):
+    while hasattr(func, '__wrapped__'):
+        func = func.__wrapped__
+    return func
 

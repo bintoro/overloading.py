@@ -168,9 +168,44 @@ def f(creature:Animal):
 
 The system does not depend on concrete inheritance, so abstract base classes such as `collections.Iterable` are supported too (but there is [a limitation](#mro) on this).
 
-#### Other decorators
+#### Decorators
 
-The overloading system can be used together with other decorators, but remember to use `functools.wraps()` so that the module can find the inner function. The order in which the decorators are applied generally does not matter (classmethods and staticmethods are a notable exception; see below).
+Overloading directives can be used together with other decorators.
+
+*Note:* When writing decorators, remember to use `functools.wraps()` so that the original function can be discovered.
+
+Decorators that are intended to apply to a single implementation must be placed after the overloading directive. In the following example, each decorator affects only the function it appears with:
+
+```python
+@overloaded
+@d1
+def f(x:int):
+    ...
+
+@overloads(f)
+@d2
+def f(x:float):
+    ...
+```
+
+Decorators placed outside the overloading decorator become associated with the name used in the function declaration. In the following example, `decorated` will affect all three functions when called through the shared invocation name `f`:
+
+```python
+@decorated
+@overloaded
+def f(x:int):
+    ...
+
+@overloads(f)
+def f(x:float):
+    ...
+
+@overloads(f)
+def foo(x:str):
+    ...
+```
+
+*Exception:* `classmethod` and `staticmethod` decorators are handled specially and should be repeated for each function declaration.
 
 #### Usage with classes
 
@@ -188,7 +223,7 @@ class C:
         ...
 ```
 
-Classmethods and staticmethods must be defined by wrapping an already-overloaded function — i.e., by using an outer decorator:
+Classmethods and staticmethods are supported. The decorator may appear either before or after the overloading decorator.
 
 ```python
 class C:

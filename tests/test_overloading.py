@@ -470,54 +470,118 @@ def test_staticmethods():
 
         @staticmethod
         @overloads(f)
-        def f(foo, bar):
+        def g(foo, bar):
             return ('any', 'any')
 
-    for _ in range(rounds):
-        assert C.f(a, b, c) == 'default'
-        assert C.f(a, 2)    == ('any', 'int')
-        assert C.f(a, b)    == ('any', 'any')
+    for obj in (C, C()):
+        for _ in range(rounds):
+            assert obj.f(a, b, c) == 'default'
+            assert obj.f(a, 2)    == ('any', 'int')
+            assert obj.f(a, b)    == ('any', 'any')
+
+    class C:
+
+        @overloaded
+        @staticmethod
+        def f(*args):
+            return 'default'
+
+        @staticmethod
+        @overloads(f)
+        def f(foo, bar:int):
+            return ('any', 'int')
+
+        @overloads(f)
+        @staticmethod
+        def f(foo:int, bar):
+            return ('int', 'any')
+
+        @overloads(f)
+        @staticmethod
+        def g(foo, bar):
+            return ('any', 'any')
+
+    for obj in (C, C()):
+        for _ in range(rounds):
+            assert obj.f(a, b, c) == 'default'
+            assert obj.f(a, 2)    == ('any', 'int')
+            assert obj.f(1, b)    == ('int', 'any')
+            assert obj.f(a, b)    == ('any', 'any')
 
 
 def test_decorated():
 
-    def decorated(func):
-        @wraps(func)
-        def wrapper(*args):
-            return func(*args)
-        return wrapper
+    def decorated(id):
+        def f(func):
+            @wraps(func)
+            def wrapper(*args):
+                return func(*args) + (id,)
+            return wrapper
+        return f
 
-    @decorated
     @overloaded
+    @decorated(2)
+    @decorated(1)
     def f(*args):
-        return 'default'
+        return ('default',)
 
     @overloads(f)
+    @decorated(4)
+    @decorated(3)
     def f(foo, bar:int):
         return ('any', 'int')
 
     @overloads(f)
-    @decorated
-    def f(foo, bar):
-        return ('any', 'any')
-
-    @overloads(f)
-    @decorated
-    def g(foo:int, bar):
+    @decorated(5)
+    def f(foo:int, bar):
         return ('int', 'any')
 
-    @decorated
+    for _ in range(rounds):
+        assert f(a, b, c) == ('default', 1, 2)
+        assert f(a, 2)    == ('any', 'int', 3, 4)
+        assert f(1, b)    == ('int', 'any', 5)
+
+    @decorated(2)
+    @overloaded
+    def f(*args):
+        return ('default',)
+
     @overloads(f)
-    def h(foo:int, bar:int):
-        return ('int', 'int')
+    @decorated(1)
+    def f(foo, bar:int):
+        return ('any', 'int')
+
+    @decorated(3)
+    @overloads(f)
+    def f(foo:int, bar):
+        return ('int', 'any')
 
     for _ in range(rounds):
-        assert f(a, b, c) == 'default'
-        assert f(a, 2)    == ('any', 'int')
-        assert f(a, b)    == ('any', 'any')
-        assert f(1, b)    == ('int', 'any')
-        assert f(1, 2)    == ('int', 'int')
-        assert g(w, w)    == ('int', 'any')
+        assert f(a, b, c) == ('default', 2, 3)
+        assert f(a, 2)    == ('any', 'int', 1, 2, 3)
+        assert f(1, b)    == ('int', 'any', 2, 3)
+
+    @decorated(3)
+    @decorated(2)
+    @overloaded
+    def f(*args):
+        return ('default',)
+
+    @overloads(f)
+    @decorated(1)
+    def g(foo, bar:int):
+        return ('any', 'int')
+
+    @decorated(4)
+    @overloads(f)
+    def h(foo:int, bar):
+        return ('int', 'any')
+
+    for _ in range(rounds):
+        assert f(a, b, c) == ('default', 2, 3)
+        assert f(a, 2)    == ('any', 'int', 1, 2, 3)
+        assert f(1, b)    == ('int', 'any', 2, 3)
+        assert h(1, b)    == ('int', 'any', 4)
 
 
 def test_errors():
@@ -553,22 +617,5 @@ def test_errors():
             pass
         @overloads(f)
         def f(foo, bar:int, *args):
-            pass
-
-    # `staticmethod` as argument to `overloaded`
-    with pytest.raises(OverloadingError):
-        @overloaded
-        @staticmethod
-        def f(*args):
-            pass
-
-    # `staticmethod` as argument to `overloads`
-    with pytest.raises(OverloadingError):
-        @overloaded
-        def f(*args):
-            pass
-        @overloads(f)
-        @staticmethod
-        def f(foo):
             pass
 
