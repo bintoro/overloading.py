@@ -364,7 +364,7 @@ There is a caveat regarding parameter subtyping. During argument matching, the r
 
 In practical terms, the matching algorithm is unable to tell whether `Iterable` or `Mapping` should be considered a better match for a `dict` instance. Although in this case the answer is obvious, there is no general solution for classes whose metaclasses implement their own `__instancecheck__` methods. It is perfectly possible for a value to be considered an instance of two classes that fail a subclass check against each other.
 
-To guard against this, the function validator requires that two different abstract base classes may not occupy the same parameter position on two different functions. For instance, you may not have `Iterable` as the first type in one function and `Mapping` in another.
+To guard against this, the function validator requires that abstract base classes may not occupy the same parameter position on two or more functions that are otherwise equivalent. For instance, you may not have `Iterable` as the first type in one function and `Mapping` in another, if that is their only distinguishing feature.
 
 This restriction may be relaxed in the future. A system of abstract base classes that has a consistent derivation hierarchy will be acceptable once the validation and matching algorithms gain the ability to recognize and deal with them.
 

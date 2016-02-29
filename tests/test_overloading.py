@@ -384,6 +384,22 @@ def test_arg_subtyping_4():
         assert f(z, z, z, z) == ('Y', 'Z', 'X', 'Z')
 
 
+def test_abc():
+
+    @overloaded
+    def f(x:int, y:collections.Iterable, z:int=1):
+        return (int, collections.Iterable, int)
+
+    @overloads(f)
+    def f(x:int, y:collections.Sequence, z:str):
+        return (int, collections.Sequence, str)
+
+    for _ in range(rounds):
+        assert f(1, {1, 2, 3}, 9) == (int, collections.Iterable, int)
+        assert f(1, [1, 2, 3], a) == (int, collections.Sequence, str)
+        assert f(1, [1, 2, 3]   ) == (int, collections.Iterable, int)
+
+
 def test_named():
 
     @overloaded
@@ -696,4 +712,15 @@ def test_errors():
         @overloads(f)
         class Foo:
             pass
+
+    # ABC rule
+    with pytest.raises(OverloadingError):
+        @overloaded
+        def f(x:int, y:collections.Iterable, z: str):
+            pass
+        @overloads(f)
+        def f(x:int, y:collections.Sequence, z: str):
+            pass
+
+
 

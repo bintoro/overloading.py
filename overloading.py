@@ -131,14 +131,10 @@ def register(dispatcher, func, hook=None):
                 if f[0] is dispatcher.__default:
                     continue
                 duplicate = sig_cmp(sig_rqd, sig_required(f[1]))
-                if duplicate is not False:
-                    if isinstance(duplicate, tuple):
-                        msg = "non-unique signature [%s]." % \
-                                str.join(', ', (type_.__name__ if type_ else '<no type>'
-                                                for type_ in duplicate))
-                    else:
-                        msg = "multiple function signatures specify an abstract " \
-                              "base class at parameter position %d" % duplicate
+                if duplicate:
+                    msg = "non-unique signature [%s]." % \
+                            str.join(', ', (type_.__name__ if type_ else '<no type>'
+                                            for type_ in duplicate))
                     raise OverloadingError("Failed to overload function '{0}': {1}"
                                            .format(dispatcher.__name__, msg))
         # All clear; register the function.
@@ -234,21 +230,20 @@ def sig_cmp(sig1, sig2):
     Compare two parameter signatures.
 
     The comparator considers all abstract base classes to be equal. This implies
-    that two function signatures may not contain an ABC at the same parameter position,
-    or else they will be considered duplicates.
+    that two function signatures may not contain an ABC at the same parameter
+    position if that is their only difference. Such signatures will be considered
+    duplicates.
 
-    If the signatures represent an exact match, return the shared signature.
-    If they match because of the ABC rule, return an integer indicating the position
-    of the parameter in question. On mismatch return `False`.
+    If the signatures represent a match, return the shared signature.
+    On mismatch return `False`.
     """
     sig = []
     if len(sig1) != len(sig2):
         return False
     for idx, (type1, type2) in enumerate(zip(sig1, sig2)):
-        if type1 is type2:
+        if type1 is type2 \
+          or inspect.isabstract(type1) and inspect.isabstract(type2):
             sig.append(type1)
-        elif inspect.isabstract(type1) and inspect.isabstract(type2):
-            return idx
         else:
             return False
     return tuple(sig)
