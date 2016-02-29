@@ -90,6 +90,8 @@ class DB:
 
 Use the `overloaded` and `overloads` decorators to register multiple implementations of a function. All variants must differ by parameter type or count. Argument types are specified as [annotations](https://www.python.org/dev/peps/pep-3107/).
 
+**New in version 0.5.0**: A simplified decorator `overload` can now be substituted for `overloaded` and `overloads(...)` in most scenarios. A fully-qualified name provided by the `__module__` and `__qualname__` attributes is used to group implementations together.
+
 ```python
 from overloading import *
 

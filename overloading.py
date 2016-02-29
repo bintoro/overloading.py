@@ -11,6 +11,7 @@ import inspect
 import re
 import sys
 import types
+from weakref import WeakValueDictionary
 
 if sys.version_info < (3, 2):
     raise RuntimeError("Module 'overloading' requires Python version 3.2 or higher.")
@@ -18,9 +19,31 @@ if sys.version_info < (3, 2):
 
 __version__ = '0.5.0'
 
-__all__ = ['overloaded', 'overloads']
+__all__ = ['overload', 'overloaded', 'overloads']
 
 DEBUG = False
+
+__registry = WeakValueDictionary()
+
+
+def overload(func):
+    if sys.version_info < (3, 3):
+        raise OverloadingError("The 'overload' syntax requires Python version 3.3 or higher.")
+    if isinstance(func, (classmethod, staticmethod)):
+        true_func = func.__func__
+    else:
+        true_func = func
+    true_func = unwrap(true_func)
+    ensure_function(true_func)
+    fname = get_full_name(true_func)
+    if fname.find('<locals>') >= 0:
+        raise OverloadingError("The 'overload' syntax cannot be used with nested functions. "
+                               "Decorators must use functools.wraps().")
+    if fname in __registry:
+        return register(__registry[fname], func)
+    else:
+        __registry[fname] = overloaded(func)
+        return __registry[fname]
 
 
 def overloaded(func):
@@ -283,4 +306,6 @@ def update_docstring(dispatcher, argspec, use_argspec):
     dispatcher.__doc__ = dispatcher.__name__ + sig + sep + doc
 
 
+def get_full_name(obj):
+    return obj.__module__ + '.' + obj.__qualname__
 

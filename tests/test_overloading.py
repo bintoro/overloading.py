@@ -1,5 +1,6 @@
 import collections
 from functools import wraps
+import sys
 
 import pytest
 
@@ -8,7 +9,13 @@ from overloading import *
 from overloading import OverloadingError
 
 
+__all__ = ['rounds', 'decorated',
+           'a', 'b', 'c', 'd', 'w', 'x', 'y', 'z', 'X', 'Y', 'Z']
+
 overloading.DEBUG = True
+
+min33 = pytest.mark.skipif(sys.version_info < (3, 3), reason="'overload' requires __qualname__")
+
 
 rounds = 100
 
@@ -29,7 +36,22 @@ class Z(Y):
 x, y, z = X(), Y(), Z()
 
 
-def test_basic():
+def decorated(id):
+    def f(func):
+        @wraps(func)
+        def wrapper(*args):
+            return func(*args) + (id,)
+        return wrapper
+    return f
+
+
+@min33
+def test_basics_1():
+
+    import _test_basics
+
+
+def test_basics_2():
 
     @overloaded
     def f(*args):
@@ -421,40 +443,10 @@ def test_hooks():
         test(f, (a, 2), ['before', ('any', 'int'), 'after'])
 
 
+@min33
 def test_classes():
 
-    class C:
-
-        @overloaded
-        def f(self, *args):
-            return 'default'
-
-        @overloads(f)
-        def f(self, foo, bar:int):
-            return ('any', 'int')
-
-        @overloads(f)
-        def f(self, foo, bar):
-            return ('any', 'any')
-
-    assert C.f.__doc__ == 'f(...)\n\n'
-
-    inst = C()
-    for _ in range(rounds):
-        assert inst.f(a, b, c) == 'default'
-        assert inst.f(a, 2)    == ('any', 'int')
-        assert inst.f(a, b)    == ('any', 'any')
-
-    class S(C):
-
-        @overloads(C.f)
-        def f(self, foo, bar, baz):
-            return ('any', 'any', 'any')
-
-    inst = S()
-    for _ in range(rounds):
-        assert inst.f(a, b)    == ('any', 'any')
-        assert inst.f(a, b, c) == ('any', 'any', 'any')
+    import _test_classes
 
 
 def test_classmethods():
@@ -537,15 +529,13 @@ def test_staticmethods():
             assert obj.f(a, b)    == ('any', 'any')
 
 
-def test_decorated():
+@min33
+def test_decorated_1():
 
-    def decorated(id):
-        def f(func):
-            @wraps(func)
-            def wrapper(*args):
-                return func(*args) + (id,)
-            return wrapper
-        return f
+    import _test_decorated
+
+
+def test_decorated_2():
 
     @overloaded
     @decorated(2)
