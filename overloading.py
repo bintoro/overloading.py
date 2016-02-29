@@ -13,7 +13,7 @@ import sys
 import types
 
 if sys.version_info < (3, 2):
-    raise Exception("Module 'overloading' requires Python version 3.2 or higher.")
+    raise RuntimeError("Module 'overloading' requires Python version 3.2 or higher.")
 
 
 __version__ = '0.5.0'
@@ -28,6 +28,8 @@ def overloaded(func):
         true_func = func.__func__
     else:
         true_func = func
+    true_func = unwrap(true_func)
+    ensure_function(true_func)
     def dispatcher(*args, **kwargs):
         cache_key = (tuple(type(arg) for arg in args),
                      tuple(sorted((name, type(arg)) for (name, arg) in kwargs.items())))
@@ -56,7 +58,7 @@ def overloaded(func):
     for attr in ('__module__', '__name__', '__qualname__', '__doc__'):
         setattr(dispatcher, attr, getattr(true_func, attr, None))
     void_implementation = is_void(true_func)
-    argspec = inspect.getfullargspec(unwrap(true_func))
+    argspec = inspect.getfullargspec(true_func)
     update_docstring(dispatcher, argspec, void_implementation)
     if void_implementation:
         return dispatcher
@@ -74,6 +76,12 @@ def register(dispatcher, func, hook=None):
         func = func.__func__
     if isinstance(dispatcher, (classmethod, staticmethod)):
         dispatcher = dispatcher.__func__
+    try:
+        dispatcher.__functions
+    except AttributeError:
+        raise OverloadingError("%r has not been set up as an overloaded function."
+                               % dispatcher)
+    ensure_function(func)
     argspec = inspect.getfullargspec(unwrap(func))
     if hook:
         dispatcher.__hooks[hook] = func
@@ -236,6 +244,11 @@ def unwrap(func):
     while hasattr(func, '__wrapped__'):
         func = func.__wrapped__
     return func
+
+
+def ensure_function(func):
+    if not isinstance(func, types.FunctionType):
+        raise OverloadingError("%r is not a function." % func)
 
 
 def is_void(func):

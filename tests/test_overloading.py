@@ -686,3 +686,24 @@ def test_errors():
         def f(foo, bar:int, *args):
             pass
 
+    # `overloads` without `overloaded`
+    with pytest.raises(OverloadingError):
+        def f(*args):
+            pass
+        @overloads(f)
+        def f(foo):
+            pass
+
+    # Invalid object
+    with pytest.raises(OverloadingError):
+        @overloaded
+        class Foo:
+            pass
+    with pytest.raises(OverloadingError):
+        @overloaded
+        def f(*args):
+            pass
+        @overloads(f)
+        class Foo:
+            pass
+
