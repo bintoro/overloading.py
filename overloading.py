@@ -4,10 +4,13 @@
     License: MIT
 """
 
+import ast
 from collections import namedtuple
 from functools import partial
 import inspect
+import re
 import sys
+import types
 
 if sys.version_info < (3, 2):
     raise Exception("Module 'overloading' requires Python version 3.2 or higher.")
@@ -52,6 +55,11 @@ def overloaded(func):
     )
     for attr in ('__module__', '__name__', '__qualname__', '__doc__'):
         setattr(dispatcher, attr, getattr(true_func, attr, None))
+    void_implementation = is_void(true_func)
+    argspec = inspect.getfullargspec(unwrap(true_func))
+    update_docstring(dispatcher, argspec, void_implementation)
+    if void_implementation:
+        return dispatcher
     return register(dispatcher, func)
 
 
@@ -228,4 +236,38 @@ def unwrap(func):
     while hasattr(func, '__wrapped__'):
         func = func.__wrapped__
     return func
+
+
+def is_void(func):
+    try:
+        source = inspect.getsource(func)
+    except (OSError, IOError):
+        return False
+    indent = re.match('\s*', source).group()
+    if indent:
+        source = re.sub('^' + indent, '', source, flags=re.M)
+    fdef = next(ast.iter_child_nodes(ast.parse(source)))
+    if (
+      type(fdef) is ast.FunctionDef and len(fdef.body) == 1 and
+      type(fdef.body[0]) is ast.Expr and
+      type(fdef.body[0].value) in {ast.Str, ast.Ellipsis}):
+        return True
+    else:
+        return False
+
+
+def update_docstring(dispatcher, argspec, use_argspec):
+    doc = dispatcher.__doc__ or ''
+    if inspect.cleandoc(doc).startswith('%s(' % dispatcher.__name__):
+        return
+    sig = '(...)'
+    if argspec.args and argspec.args[0] in {'self', 'cls'}:
+        argspec.args.pop(0)
+    if use_argspec and any(argspec):
+        sig = inspect.formatargspec(*argspec)
+        sig = re.sub(r' at 0x[0-9a-f]{8,16}(?=>)', '', sig)
+    sep = '\n' if doc.startswith('\n') else '\n\n'
+    dispatcher.__doc__ = dispatcher.__name__ + sig + sep + doc
+
+
 

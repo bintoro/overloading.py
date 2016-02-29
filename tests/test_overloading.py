@@ -35,8 +35,6 @@ def test_basic():
     def f(*args):
         return 'default'
 
-    assert f.__name__ == 'f'
-
     @overloads(f)
     def f(foo):
         return ('any')
@@ -60,6 +58,9 @@ def test_basic():
     @overloads(f)
     def f(foo:str, bar:int, baz: X):
         return ('str', 'int', 'X')
+
+    assert f.__name__ == 'f'
+    assert f.__doc__  == 'f(...)\n\n'
 
     for _ in range(rounds):
         assert f()           == 'default'
@@ -436,6 +437,8 @@ def test_classes():
         def f(self, foo, bar):
             return ('any', 'any')
 
+    assert C.f.__doc__ == 'f(...)\n\n'
+
     inst = C()
     for _ in range(rounds):
         assert inst.f(a, b, c) == 'default'
@@ -607,6 +610,45 @@ def test_decorated():
         assert f(a, 2)    == ('any', 'int', 1, 2, 3)
         assert f(1, b)    == ('int', 'any', 2, 3)
         assert h(1, b)    == ('int', 'any', 4)
+
+
+def test_void_implementation():
+
+    @overloaded
+    def f(a, b, x : int, y : float):
+        """
+        Just
+        a
+        docstring
+        """
+
+    assert f.__doc__ == \
+        """f(a, b, x: int, y: float)
+
+        Just
+        a
+        docstring
+        """
+
+    @overloaded
+    # aaa
+    def g(self,
+          x: int) -> None:    
+
+        # xzxz
+
+        ... # qweqwe
+
+    assert g.__doc__ == 'g(x: int) -> None\n\n'
+
+    @overloaded
+    def h(): ...
+
+    assert h.__doc__ == 'h(...)\n\n'
+
+    assert len(f.__functions) == 0
+    assert len(g.__functions) == 0
+    assert len(h.__functions) == 0
 
 
 def test_errors():
