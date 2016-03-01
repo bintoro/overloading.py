@@ -121,6 +121,10 @@ def register(dispatcher, func, hook=None):
     else:
         sig_full = get_type_signature(func)
         sig_rqd = get_type_signature(func, required_only=True)
+        if argspec.defaults:
+            defaults = {k: v for k, v in zip(argspec.args[-len(argspec.defaults):], argspec.defaults)}
+        else:
+            defaults = {}
         if argspec.varargs:
             # The presence of a catch-all variable for positional arguments
             # indicates that this function should be treated as the fallback.
@@ -147,7 +151,7 @@ def register(dispatcher, func, hook=None):
                     raise OverloadingError("Failed to overload function '{0}': {1}"
                                            .format(dispatcher.__name__, msg))
         # All clear; register the function.
-        dispatcher.__functions.append((func, argspec, sig_full))
+        dispatcher.__functions.append((func, argspec, sig_full, defaults))
         if typing and any((isinstance(t, typing.TypingMeta) for t in sig_rqd)):
             dispatcher.__cacheable = False
     if func.__name__ == dispatcher.__name__:
@@ -162,7 +166,8 @@ Match = namedtuple('Match', 'score, func, sig')
 
 def find(dispatcher, args, kwargs):
     matches = [Match((-1,), None, None)]
-    for func, argspec, sig in dispatcher.__functions:
+    maxlen = max(len(f[2]) for f in dispatcher.__functions)
+    for func, argspec, sig, defaults in dispatcher.__functions:
         # Filter out keyword arguments that will be consumed by a catch-all parameter
         # or by keyword-only parameters.
         if argspec.varkw or argspec.kwonlyargs:
@@ -170,7 +175,7 @@ def find(dispatcher, args, kwargs):
         else:
             true_kwargs = kwargs
         arg_count = len(args) + len(true_kwargs)
-        optional_count = len(argspec.defaults) if argspec.defaults else 0
+        optional_count = len(defaults)
         required_count = len(argspec.args) - optional_count
         # Consider candidate functions that satisfy basic conditions:
         # - argument count matches signature
@@ -182,7 +187,7 @@ def find(dispatcher, args, kwargs):
         arg_score = arg_count # >= 0
         type_score = 0
         exact_score = 0
-        mro_scores = [0] * len(sig)
+        mro_scores = [0] * maxlen
         sig_score = required_count
         args_by_key = {argspec.args[idx]: val for (idx, val) in enumerate(args)}
         args_by_key.update(true_kwargs)
@@ -191,6 +196,10 @@ def find(dispatcher, args, kwargs):
             param_pos = argspec.args.index(argname)
             expected_type = sig[param_pos]
             if expected_type is not _empty:
+                if value is None and defaults.get(argname, _empty) is None:
+                    # Optional parameter got explicit None.
+                    match = True
+                    expected_type = type(None)
                 _type = type(value)
                 if issubclass(_type, expected_type):
                     if typing and isinstance(expected_type, typing.TypingMeta):

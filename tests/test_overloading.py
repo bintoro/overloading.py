@@ -125,6 +125,28 @@ def test_basics_2():
     assert len(g.__cache) == 3
 
 
+@pytest.mark.parametrize('typing', (None, typing))
+def test_optional(typing):
+
+    overloading.typing = typing
+
+    @overloaded
+    def f(foo, bar:int=None, baz:str=None):
+        return ('any', 'optional int', 'optional str')
+
+    @overloads(f)
+    def f(foo, bar:int):
+        return ('any', 'int')
+
+    for _ in range(rounds):
+        assert f(a, 1)       == ('any', 'int')
+        assert f(a)          == ('any', 'optional int', 'optional str')
+        assert f(a, None)    == ('any', 'optional int', 'optional str')
+        assert f(a, 1, None) == ('any', 'optional int', 'optional str')
+        assert f(a, None, c) == ('any', 'optional int', 'optional str')
+        assert f(a, 1,    c) == ('any', 'optional int', 'optional str')
+
+
 def test_kwargs_1():
 
     @overloaded
