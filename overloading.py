@@ -1,6 +1,6 @@
 """
     overloading.py -- function overloading for Python 3
-    Copyright: 2016 Kalle Tuure
+    Copyright: 2014–2016 Kalle Tuure
     License: MIT
 """
 
@@ -13,6 +13,11 @@ import sys
 import types
 from weakref import WeakValueDictionary
 
+try:
+    import typing
+except ImportError:
+    typing = None
+
 if sys.version_info < (3, 2):
     raise RuntimeError("Module 'overloading' requires Python version 3.2 or higher.")
 
@@ -24,6 +29,8 @@ __all__ = ['overload', 'overloaded', 'overloads']
 DEBUG = False
 
 __registry = WeakValueDictionary()
+
+_empty = object()
 
 
 def overload(func):
@@ -54,12 +61,14 @@ def overloaded(func):
     true_func = unwrap(true_func)
     ensure_function(true_func)
     def dispatcher(*args, **kwargs):
-        cache_key = (tuple(type(arg) for arg in args),
-                     tuple(sorted((name, type(arg)) for (name, arg) in kwargs.items())))
-        resolved = dispatcher.__cache.get(cache_key)
+        resolved = None
+        if dispatcher.__cacheable:
+            cache_key = (tuple(type(arg) for arg in args),
+                         tuple(sorted((name, type(arg)) for (name, arg) in kwargs.items())))
+            resolved = dispatcher.__cache.get(cache_key)
         if not resolved:
             resolved = find(dispatcher, args, kwargs) or dispatcher.__default
-            if resolved:
+            if resolved and dispatcher.__cacheable:
                 dispatcher.__cache[cache_key] = resolved
         if resolved:
             before = dispatcher.__hooks.get('before')
@@ -77,6 +86,7 @@ def overloaded(func):
         __hooks = {},
         __default = None,
         __cache = {},
+        __cacheable = True
     )
     for attr in ('__module__', '__name__', '__qualname__', '__doc__'):
         setattr(dispatcher, attr, getattr(true_func, attr, None))
@@ -109,8 +119,8 @@ def register(dispatcher, func, hook=None):
     if hook:
         dispatcher.__hooks[hook] = func
     else:
-        sig_full = sig_regular(argspec)
-        sig_rqd = sig_required(argspec)
+        sig_full = get_type_signature(func)
+        sig_rqd = get_type_signature(func, required_only=True)
         if argspec.varargs:
             # The presence of a catch-all variable for positional arguments
             # indicates that this function should be treated as the fallback.
@@ -121,8 +131,8 @@ def register(dispatcher, func, hook=None):
                   .format(dispatcher.__name__))
             dispatcher.__default = func
         else:
-            for i, param in enumerate(sig_full):
-                if not inspect.isclass(param) and param is not None:
+            for i, type_ in enumerate(sig_full):
+                if not isinstance(type_, type) and type_ not in (_empty, None):
                     raise OverloadingError(
                       "Failed to overload function '{0}': parameter '{1}' has "
                       "an annotation that is not a type."
@@ -130,15 +140,16 @@ def register(dispatcher, func, hook=None):
             for f in dispatcher.__functions:
                 if f[0] is dispatcher.__default:
                     continue
-                duplicate = sig_cmp(sig_rqd, sig_required(f[1]))
-                if duplicate:
+                if sig_cmp(sig_rqd, get_type_signature(f[0], required_only=True)):
                     msg = "non-unique signature [%s]." % \
-                            str.join(', ', (type_.__name__ if type_ else '<no type>'
-                                            for type_ in duplicate))
+                        str.join(', ', (repr(t) if t is not _empty else '<any type>'
+                                        for t in sig_rqd))
                     raise OverloadingError("Failed to overload function '{0}': {1}"
                                            .format(dispatcher.__name__, msg))
         # All clear; register the function.
         dispatcher.__functions.append((func, argspec, sig_full))
+        if typing and any((isinstance(t, typing.TypingMeta) for t in sig_rqd)):
+            dispatcher.__cacheable = False
     if func.__name__ == dispatcher.__name__:
         # The returned function is going to be bound to the invocation name
         # in the calling scope, so keep returning the dispatcher.
@@ -176,23 +187,51 @@ def find(dispatcher, args, kwargs):
         args_by_key = {argspec.args[idx]: val for (idx, val) in enumerate(args)}
         args_by_key.update(true_kwargs)
         for argname, value in args_by_key.items():
-            expected_type = argspec.annotations.get(argname)
-            if expected_type:
-                if isinstance(value, expected_type):
-                    type_score += 1
-                    if type(value) is expected_type:
+            match = False
+            param_pos = argspec.args.index(argname)
+            expected_type = sig[param_pos]
+            if expected_type is not _empty:
+                _type = type(value)
+                if issubclass(_type, expected_type):
+                    if typing and isinstance(expected_type, typing.TypingMeta):
+                        if issubclass(expected_type, typing.Union):
+                            match = True
+                            types = [t for t in expected_type.__union_params__ if issubclass(_type, t)]
+                            if len(types) > 1:
+                                expected_type = find_most_derived(types)
+                            else:
+                                expected_type = types[0]
+                        elif issubclass(expected_type, typing.Tuple):
+                            params = expected_type.__tuple_params__
+                            if expected_type.__tuple_use_ellipsis__:
+                                match = all(issubclass(type(v), params[0]) for v in value)
+                            elif len(value) == len(params):
+                                match = all(issubclass(type(v), t) for v, t in zip(value, params))
+                        elif issubclass(expected_type, typing.Iterable):
+                            if issubclass(type(next(iter(value))), expected_type.__parameters__[0]):
+                                match = True
+                        else:
+                            match = True
+                        if not match:
+                            arg_score = -2
+                            break
+                    else:
+                        match = True
+                    if match:
+                        type_score += 1
+                    if _type is expected_type:
                         exact_score += 1
                     # Compute a rank for how close the match is in terms of
                     # the type hierarchy.
                     try:
-                        mro_index = type(value).__mro__.index(expected_type)
+                        mro_index = _type.__mro__.index(expected_type)
                     except ValueError:
                         # The expected type was not part of the MRO. This can only
-                        # happen when the type has a metaclass with a custom
-                        # implementation of `__instancecheck__`. For now, deal with
-                        # it by simply giving the match a low rank.
+                        # happen when the declared type has a metaclass with a custom
+                        # implementation of `__subclasscheck__()`. The position is
+                        # given a rank of -99, and a possible tie is resolved later.
                         mro_index = 99
-                    mro_scores[argspec.args.index(argname)] = -mro_index
+                    mro_scores[param_pos] = -mro_index
                 else:
                     # Discard immediately on type mismatch.
                     arg_score = -2
@@ -230,36 +269,56 @@ def find(dispatcher, args, kwargs):
     return matches[0].func
 
 
-def sig_regular(argspec):
-    return tuple(argspec.annotations.get(arg) for arg in argspec.args)
-
-
-def sig_required(argspec):
-    return tuple(argspec.annotations.get(arg) for arg in required_args(argspec))
-
-
-def required_args(argspec):
-    if argspec.defaults:
-        return argspec.args[:-len(argspec.defaults)]
+def get_type_signature(func, *, required_only=False):
+    """
+    Returns a tuple of type annotations representing the call signature of `func`.
+    """
+    func = unwrap(func)
+    argspec = inspect.getfullargspec(func)
+    type_hints = argspec.annotations
+    if typing:
+        type_hints = typing.get_type_hints(func)
+    if required_only and argspec.defaults:
+        params = argspec.args[:-len(argspec.defaults)]
     else:
-        return argspec.args
+        params = argspec.args
+    return tuple(normalize_type(type_hints.get(param, _empty)) for param in params)
+
+
+def normalize_type(type_, _level=0):
+    """Reduces an arbitrarily complex type declaration into something manageable."""
+    _level += 1
+    if not typing or not isinstance(type_, typing.TypingMeta) or type_ is typing.Any:
+        return type_
+    if isinstance(type_, typing.TypeVar):
+        return type_
+    if issubclass(type_, typing.Union):
+        return typing.Union[tuple(normalize_type(t, _level) for t in type_.__union_params__)]
+    if issubclass(type_, typing.Tuple):
+        if _level > 1:
+            return typing.Tuple
+        if type_.__tuple_use_ellipsis__:
+            return typing.Tuple[normalize_type(type_.__tuple_params__[0], _level), ...]
+        else:
+            return typing.Tuple[tuple(normalize_type(t, _level) for t in type_.__tuple_params__)]
+    if issubclass(type_, typing.Callable):
+        return typing.Callable
+    if isinstance(type_, typing.GenericMeta):
+        origin = type_.__origin__ or type_
+        params = type_.__parameters__
+        if issubclass(type_, typing.Iterable) and len(params) == 1 \
+          and _level == 1:
+            return origin[normalize_type(params[0], _level)]
+        else:
+            return origin
+    raise OverloadingError("%r not supported yet" % type_)
 
 
 def sig_cmp(sig1, sig2):
     """
-    Compare two parameter signatures.
-
-    For duplicate signatures, return the shared signature. On mismatch return `False`.
+    Compares two normalized type signatures for validation purposes.
     """
-    sig = []
-    if len(sig1) != len(sig2):
-        return False
-    for idx, (type1, type2) in enumerate(zip(sig1, sig2)):
-        if type1 is type2:
-            sig.append(type1)
-        else:
-            return False
-    return tuple(sig)
+    return sig1 == sig2
 
 
 def error(name):

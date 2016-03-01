@@ -6,7 +6,12 @@ import pytest
 
 import overloading
 from overloading import *
-from overloading import OverloadingError
+from overloading import OverloadingError, typing
+
+if typing:
+    from typing import (
+        Any, Callable, Generic, Optional, TypeVar, Union, Tuple,
+        Sequence, Iterable)
 
 
 __all__ = ['rounds', 'decorated',
@@ -15,6 +20,7 @@ __all__ = ['rounds', 'decorated',
 overloading.DEBUG = True
 
 min33 = pytest.mark.skipif(sys.version_info < (3, 3), reason="'overload' requires __qualname__")
+requires_typing = pytest.mark.skipif(not typing, reason="'typing' module required")
 
 
 rounds = 100
@@ -427,6 +433,109 @@ def test_abc():
 
     for _ in range(rounds):
         assert f([1, 2, 3], [1, 2, 3], [1, 2, 3]) == (Iterable, MutableSequence, Sequence)
+
+
+@requires_typing
+def test_typing_basics():
+
+    @overloaded
+    def f(u:Iterable, x:int, y:Iterable, z:int):
+        return (Iterable, int, Iterable, int)
+
+    @overloads(f)
+    def f(u:Iterable, x:int, y:Sequence, z:int):
+        return (Iterable, int, Sequence, int)
+
+    for _ in range(rounds):
+        assert f((1, 2), 1, {1, 2, 3}, 9) == (Iterable, int, Iterable, int)
+        assert f((1, 2), 1, [1, 2, 3], 9) == (Iterable, int, Sequence, int)
+
+    @overloaded
+    def f(foo:Iterable):
+        return (Iterable,)
+
+    @overloads(f)
+    def f(arg:Sequence):
+        return (Sequence,)
+
+    @overloads(f)
+    def f(arg:list):
+        return (list,)
+
+    @overloads(f)
+    def f(x:Iterable, y:list):
+        return (Iterable, list)
+
+    @overloads(f)
+    def f(x:list, y: Sequence):
+        return (list, Sequence)
+
+    @overloads(f)
+    def f(x:Iterable, y:Sequence):
+        return (Iterable, Sequence)
+
+    for _ in range(rounds):
+        assert f({1, 2, 3}) == (Iterable,)
+        assert f([1, 2, 3]) == (list,)
+        assert f([1, 2, 3], [1, 2, 3]) == (list, Sequence)
+        assert f({1, 2, 3}, [1, 2, 3]) == (Iterable, list)
+
+
+@requires_typing
+def test_typing_tuple():
+
+    @overloaded
+    def f(arg: Tuple[int, str]):
+        return int, str
+
+    @overloads(f)
+    def f(arg: Tuple[str, int]):
+        return str, int
+
+    for _ in range(rounds):
+        assert f((1, b)) == (int, str)
+        assert f((a, 2)) == (str, int)
+
+    @overloaded
+    def f(arg: Tuple[int, ...]):
+        return int
+
+    @overloads(f)
+    def f(arg: Tuple[str, ...]):
+        return str
+
+    for _ in range(rounds):
+        assert f((1, 2, 3)) == int
+        assert f((a, b, c)) == str
+        with pytest.raises(TypeError):
+            f((1, b, 3))
+
+
+@requires_typing
+def test_typing_type_var():
+
+    N = TypeVar('N', int, float)
+    M = TypeVar('M', list, str)
+    T = TypeVar('T')
+
+    class Foo(Generic[T, M]):
+        pass
+
+    @overloaded
+    def f(arg: Sequence[N]):
+        return N
+
+    @overloads(f)
+    def f(arg: Sequence[M]):
+        return M
+
+    @overloads(f)
+    def f(arg: Foo[int, str]):
+        return 'Hello'
+
+    assert f([1, 2, 3]) == N
+    assert f([a, b, c]) == M
+    assert f(Foo()) == 'Hello'
 
 
 def test_named():
