@@ -147,10 +147,10 @@ def register(dispatcher, func, hook=None):
         return wrapper(func)
 
 
-Match = namedtuple('Match', 'score, func')
+Match = namedtuple('Match', 'score, func, sig')
 
 def find(dispatcher, args, kwargs):
-    matches = [Match((-1,), None)]
+    matches = [Match((-1,), None, None)]
     for func, argspec, sig in dispatcher.__functions:
         # Filter out keyword arguments that will be consumed by a catch-all parameter
         # or by keyword-only parameters.
@@ -198,16 +198,36 @@ def find(dispatcher, args, kwargs):
                     arg_score = -2
                     break
         score = (arg_score, type_score, exact_score, mro_scores, sig_score)
-        matches.append(Match(score, func))
+        matches.append(Match(score, func, sig))
     matches = sorted(matches, key=lambda m: m.score, reverse=True)
-    top_matches = [m for m in matches if m.score == matches[0].score]
+    matches = [m for m in matches if m.score == matches[0].score]
     # print(tuple((m.func.__name__, m.score) for m in matches if m.func))
-    if len(top_matches) > 1:
+    if len(matches) > 1:
+        # A tie may occur because some of the argument matches are not due to concrete
+        # inheritance, i.e., when the declared types have overridden `__subclasscheck__()`.
+        # We'll establish a ranking among the declared types at each applicable parameter
+        # position, and the function whose signature produces a unique most derived type
+        # at the earliest position wins.
+        type_matrix = list(filter(bool,
+                        ([ (match_idx, match.sig[param_pos])
+                           for param_pos, mro_score in enumerate(match.score[3])
+                           if mro_score == -99
+                         ] for match_idx, match in enumerate(matches))))
+        if type_matrix:
+            match_indices = set(range(len(type_matrix)))
+            for types_ in zip(*type_matrix):
+                # We're iterating over argument positions.
+                # Elements in `types_` are (<match index>, <type>) tuples.
+                match_indices &= set([t[0] for t in find_most_derived(types_, index=1)])
+                if len(match_indices) == 1:
+                    break
+            matches = [matches[i] for i in match_indices]
+    if len(matches) > 1:
         # Give priority to non-default functions.
-        top_matches = [m for m in top_matches if m.func is not dispatcher.__default]
+        matches = [m for m in matches if m.func is not dispatcher.__default]
     if DEBUG:
-        assert len(top_matches) == 1
-    return top_matches[0].func
+        assert len(matches) == 1, [(m.sig, m.score) for m in matches]
+    return matches[0].func
 
 
 def sig_regular(argspec):
@@ -229,20 +249,13 @@ def sig_cmp(sig1, sig2):
     """
     Compare two parameter signatures.
 
-    The comparator considers all abstract base classes to be equal. This implies
-    that two function signatures may not contain an ABC at the same parameter
-    position if that is their only difference. Such signatures will be considered
-    duplicates.
-
-    If the signatures represent a match, return the shared signature.
-    On mismatch return `False`.
+    For duplicate signatures, return the shared signature. On mismatch return `False`.
     """
     sig = []
     if len(sig1) != len(sig2):
         return False
     for idx, (type1, type2) in enumerate(zip(sig1, sig2)):
-        if type1 is type2 \
-          or inspect.isabstract(type1) and inspect.isabstract(type2):
+        if type1 is type2:
             sig.append(type1)
         else:
             return False
@@ -303,4 +316,28 @@ def update_docstring(dispatcher, argspec, use_argspec):
 
 def get_full_name(obj):
     return obj.__module__ + '.' + obj.__qualname__
+
+
+def find_most_derived(items, index=None):
+    """Finds the most derived type in `items`.
+
+    `items` may also consist of tuples, in which case `index` must indicate
+    the position of the type within each tuple.
+    """
+    best = object
+    if index is None:
+        for type_ in items:
+            if type_ is not best and issubclass(type_, best):
+                best = type_
+        return best
+    else:
+        result = []
+        for e in items:
+            type_ = e[index]
+            if issubclass(type_, best):
+                if type_ is not best:
+                    result = []
+                    best = type_
+                result.append(e)
+        return result
 

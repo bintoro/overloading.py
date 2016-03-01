@@ -168,7 +168,7 @@ def f(creature:Animal):
 123
 ```
 
-The system does not depend on concrete inheritance, so abstract base classes such as `collections.Iterable` are supported too (but there is [a limitation](#mro) on this).
+The system does not depend on concrete inheritance, so abstract base classes such as `collections.Iterable` are supported too.
 
 #### Decorators
 
@@ -357,16 +357,6 @@ def g(foo:int):
 >>> g('hello')    # Bypass dispatcher and call `g` regardless of arg type.
 'expects integer'
 ```
-
-#### <a name="mro"></a>More on argument polymorphism and function validation
-
-There is a caveat regarding parameter subtyping. During argument matching, the ranking of candidate functions according to type specificity depends on the classes' inheritance hierarchies (MROs). However, an argument value may be considered an instance of a class even if the MRO does not actually include the class. This is the case with, e.g., abstract base classes.
-
-In practical terms, the matching algorithm is unable to tell whether `Iterable` or `Mapping` should be considered a better match for a `dict` instance. Although in this case the answer is obvious, there is no general solution for classes whose metaclasses implement their own `__instancecheck__` methods. It is perfectly possible for a value to be considered an instance of two classes that fail a subclass check against each other.
-
-To guard against this, the function validator requires that abstract base classes may not occupy the same parameter position on two or more functions that are otherwise equivalent. For instance, you may not have `Iterable` as the first type in one function and `Mapping` in another, if that is their only distinguishing feature.
-
-This restriction may be relaxed in the future. A system of abstract base classes that has a consistent derivation hierarchy will be acceptable once the validation and matching algorithms gain the ability to recognize and deal with them.
 
 #### A note on parameters
 

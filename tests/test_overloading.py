@@ -384,20 +384,49 @@ def test_arg_subtyping_4():
         assert f(z, z, z, z) == ('Y', 'Z', 'X', 'Z')
 
 
+def test_type_ordering():
+
+    assert overloading.find_most_derived([X, Z, Y, Z, X, Y]) == Z
+    assert overloading.find_most_derived(
+        [(X, 1), (Z, 2), (Y, 3), (Z, 4), (X, 5), (Y, 6)], index=0) == [(Z, 2), (Z, 4)]
+
+
 def test_abc():
 
+    Iterable = collections.Iterable
+    Sequence = collections.Sequence
+    MutableSequence = collections.MutableSequence
+
     @overloaded
-    def f(x:int, y:collections.Iterable, z:int=1):
-        return (int, collections.Iterable, int)
+    def f(u:Iterable, x:int, y:Iterable, z:int):
+        return (Iterable, int, Iterable, int)
 
     @overloads(f)
-    def f(x:int, y:collections.Sequence, z:str):
-        return (int, collections.Sequence, str)
+    def f(u:Iterable, x:int, y:Sequence, z:int):
+        return (Iterable, int, Sequence, int)
 
     for _ in range(rounds):
-        assert f(1, {1, 2, 3}, 9) == (int, collections.Iterable, int)
-        assert f(1, [1, 2, 3], a) == (int, collections.Sequence, str)
-        assert f(1, [1, 2, 3]   ) == (int, collections.Iterable, int)
+        assert f((1, 2), 1, {1, 2, 3}, 9) == (Iterable, int, Iterable, int)
+        assert f((1, 2), 1, [1, 2, 3], 9) == (Iterable, int, Sequence, int)
+
+    @overloaded
+    def f(x:Iterable, y:Iterable, z:Sequence):
+        return (Iterable, Iterable, Sequence)
+
+    @overloads(f)
+    def f(x:Iterable, y:Sequence, z:Sequence):
+        return (Iterable, Sequence, Sequence)
+
+    @overloads(f)
+    def f(x:Iterable, y:MutableSequence, z:Sequence):
+        return (Iterable, MutableSequence, Sequence)
+
+    @overloads(f)
+    def f(x:Iterable, y:MutableSequence, z:Iterable):
+        return (Iterable, MutableSequence, Iterable)
+
+    for _ in range(rounds):
+        assert f([1, 2, 3], [1, 2, 3], [1, 2, 3]) == (Iterable, MutableSequence, Sequence)
 
 
 def test_named():
@@ -712,15 +741,4 @@ def test_errors():
         @overloads(f)
         class Foo:
             pass
-
-    # ABC rule
-    with pytest.raises(OverloadingError):
-        @overloaded
-        def f(x:int, y:collections.Iterable, z: str):
-            pass
-        @overloads(f)
-        def f(x:int, y:collections.Sequence, z: str):
-            pass
-
-
 
