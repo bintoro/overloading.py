@@ -178,6 +178,8 @@ def test_kwargs_1():
         assert f(a, 2, baz=1)       == ('any', 'any?', 'int?')
         assert f(a,    baz=1)       == ('any', 'any?', 'int?')
         assert f(a, 2, baz=1, u=1)  == 'default'
+        with pytest.raises(TypeError):
+            f(a, bar=2, foo=1)
 
     assert len(f.__cache) == 12
 

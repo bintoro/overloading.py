@@ -174,6 +174,7 @@ def find(dispatcher, args, kwargs):
             true_kwargs = {kw: kwargs[kw] for kw in argspec.args if kw in kwargs}
         else:
             true_kwargs = kwargs
+        kwarg_set = set(true_kwargs)
         arg_count = len(args) + len(true_kwargs)
         optional_count = len(defaults)
         required_count = len(argspec.args) - optional_count
@@ -182,15 +183,18 @@ def find(dispatcher, args, kwargs):
         # - all keyword arguments are recognized.
         if not (0 <= len(argspec.args) - arg_count <= optional_count):
             continue
-        if not set(true_kwargs) <= set(argspec.args):
+        if not kwarg_set <= set(argspec.args):
             continue
+        args_by_key = {k: v for k, v in zip(argspec.args, args)}
+        if set(args_by_key) & kwarg_set:
+            raise TypeError("%s() got multiple values for the same parameter"
+                            % dispatcher.__name__)
+        args_by_key.update(true_kwargs)
         arg_score = arg_count # >= 0
         type_score = 0
         exact_score = 0
         mro_scores = [0] * maxlen
         sig_score = required_count
-        args_by_key = {argspec.args[idx]: val for (idx, val) in enumerate(args)}
-        args_by_key.update(true_kwargs)
         for argname, value in args_by_key.items():
             match = False
             param_pos = argspec.args.index(argname)
