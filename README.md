@@ -1,6 +1,9 @@
 # overloading.py
 
-###### Function overloading for Python 3
+##### Function overloading for Python 3
+
+[![Build Status](https://travis-ci.org/bintoro/overloading.py.svg?branch=master)](https://travis-ci.org/bintoro/overloading.py)
+[![Coverage Status](https://coveralls.io/repos/github/bintoro/overloading.py/badge.svg?branch=master)](https://coveralls.io/github/bintoro/overloading.py)
 
 `overloading` is a module that provides function dispatching based on the types and number of runtime arguments.
 
@@ -10,7 +13,7 @@ When an overloaded function is invoked, the dispatcher compares the supplied arg
 
 * Function validation upon registration and detailed resolution rules guarantee a unique, well-defined outcome at runtime.
 * Implements function resolution caching for great performance.
-* Supports optional parameters (default values) in function signatures.
+* Supports optional parameters.
 * Evaluates both positional and keyword arguments when resolving the best match.
 * Supports fallback functions and execution of shared code.
 * Supports argument polymorphism.
@@ -54,21 +57,22 @@ class DB:
 
 #### Why use overloading instead of \*args / **kwargs?
 
-*   Explicit function signatures
-*   No more mechanical argument validation and error throwing in the function body
-*   Clean way of handling different behaviors in separate functions
+*   Explicit call signatures
+*   Enables type hinting and static type checking
+*   Reduces mechanical argument validation
+*   Improves code organization
 
 #### Why use overloading instead of functions with different names?
 
-*   The calling code does not need to depend on argument types.
-*   The name of the function may not always be chosen freely. For example, you may want to instantiate a class based on a variable set of arguments — but there is only one `__init__`.
+*   With overloading, the calling code does not need to depend on argument types.
+*   The name of a method may not always be chosen freely; for example, consider `__init__()` or an externally defined interface that accepts a variable set of arguments.
 *   Sometimes you just *want* to expose a single function, particularly when separate names don't add semantic value.
 
     Consider:
     ```python
-    def feed(creature:Human):
+    def feed(creature: Human):
         ...
-    def feed(creature:Dog):
+    def feed(creature: Dog):
         ...
     ```
     vs:

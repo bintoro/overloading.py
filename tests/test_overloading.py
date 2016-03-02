@@ -782,6 +782,14 @@ def test_decorated_2():
 
 def test_void_implementation():
 
+    doc = \
+        """f(a, b, x: int, y: float)
+
+        Just
+        a
+        docstring
+        """
+
     @overloaded
     def f(a, b, x : int, y : float):
         """
@@ -790,13 +798,18 @@ def test_void_implementation():
         docstring
         """
 
-    assert f.__doc__ == \
+    assert f.__doc__ == doc
+
+    @overloaded
+    def f(foo: 0):
         """f(a, b, x: int, y: float)
 
         Just
         a
         docstring
         """
+
+    assert f.__doc__ == doc
 
     @overloaded
     # aaa

@@ -11,6 +11,7 @@ setup(
     license = 'MIT',
     py_modules = ['overloading'],
     install_requires = [],
+    keywords = 'overload function method dispatch',
     classifiers = [
         'Programming Language :: Python',
         'Programming Language :: Python :: 3',

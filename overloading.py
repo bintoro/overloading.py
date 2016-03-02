@@ -4,6 +4,12 @@
     License: MIT
 """
 
+__version__ = '0.5.0'
+
+__all__ = ['overload', 'overloaded', 'overloads']
+
+
+
 import ast
 from collections import namedtuple
 from functools import partial
@@ -21,44 +27,34 @@ except ImportError:
 if sys.version_info < (3, 2):
     raise RuntimeError("Module 'overloading' requires Python version 3.2 or higher.")
 
-
-__version__ = '0.5.0'
-
-__all__ = ['overload', 'overloaded', 'overloads']
-
 DEBUG = False
 
-__registry = WeakValueDictionary()
 
-_empty = object()
+
+######
+##
+##  Public interface
+##
 
 
 def overload(func):
     if sys.version_info < (3, 3):
         raise OverloadingError("The 'overload' syntax requires Python version 3.3 or higher.")
-    if isinstance(func, (classmethod, staticmethod)):
-        true_func = func.__func__
-    else:
-        true_func = func
-    true_func = unwrap(true_func)
+    true_func = unwrap(func)
     ensure_function(true_func)
     fname = get_full_name(true_func)
     if fname.find('<locals>') >= 0:
         raise OverloadingError("The 'overload' syntax cannot be used with nested functions. "
                                "Decorators must use functools.wraps().")
-    if fname in __registry:
+    try:
         return register(__registry[fname], func)
-    else:
+    except KeyError:
         __registry[fname] = overloaded(func)
         return __registry[fname]
 
 
 def overloaded(func):
-    if isinstance(func, (classmethod, staticmethod)):
-        true_func = func.__func__
-    else:
-        true_func = func
-    true_func = unwrap(true_func)
+    true_func = unwrap(func)
     ensure_function(true_func)
     def dispatcher(*args, **kwargs):
         resolved = None
@@ -102,7 +98,21 @@ def overloads(dispatcher, hook=None):
     return partial(register, dispatcher, hook=hook)
 
 
-def register(dispatcher, func, hook=None):
+
+######
+##
+##  Private interface
+##
+
+
+__registry = WeakValueDictionary()
+
+FunctionInfo = namedtuple('FunctionInfo', 'func, argspec, sig, defaults')
+
+_empty = object()
+
+
+def register(dispatcher, func, *, hook=None):
     wrapper = lambda x: x
     if isinstance(func, (classmethod, staticmethod)):
         wrapper = type(func)
@@ -141,17 +151,17 @@ def register(dispatcher, func, hook=None):
                       "Failed to overload function '{0}': parameter '{1}' has "
                       "an annotation that is not a type."
                       .format(dispatcher.__name__, argspec.args[i]))
-            for f in dispatcher.__functions:
-                if f[0] is dispatcher.__default:
+            for fninfo in dispatcher.__functions:
+                if fninfo.func is dispatcher.__default:
                     continue
-                if sig_cmp(sig_rqd, get_type_signature(f[0], required_only=True)):
+                if sig_cmp(sig_rqd, get_type_signature(fninfo.func, required_only=True)):
                     msg = "non-unique signature [%s]." % \
                         str.join(', ', (repr(t) if t is not _empty else '<any type>'
                                         for t in sig_rqd))
                     raise OverloadingError("Failed to overload function '{0}': {1}"
                                            .format(dispatcher.__name__, msg))
         # All clear; register the function.
-        dispatcher.__functions.append((func, argspec, sig_full, defaults))
+        dispatcher.__functions.append(FunctionInfo(func, argspec, sig_full, defaults))
         if typing and any((isinstance(t, typing.TypingMeta) for t in sig_rqd)):
             dispatcher.__cacheable = False
     if func.__name__ == dispatcher.__name__:
@@ -163,6 +173,7 @@ def register(dispatcher, func, hook=None):
 
 
 Match = namedtuple('Match', 'score, func, sig')
+
 
 def find(dispatcher, args, kwargs):
     matches = [Match((-1,), None, None)]
@@ -181,7 +192,7 @@ def find(dispatcher, args, kwargs):
         # Consider candidate functions that satisfy basic conditions:
         # - argument count matches signature
         # - all keyword arguments are recognized.
-        if not (0 <= len(argspec.args) - arg_count <= optional_count):
+        if not 0 <= len(argspec.args) - arg_count <= optional_count:
             continue
         if not kwarg_set <= set(argspec.args):
             continue
@@ -249,11 +260,12 @@ def find(dispatcher, args, kwargs):
                     # Discard immediately on type mismatch.
                     arg_score = -2
                     break
+        if arg_score < 0:
+            continue
         score = (arg_score, type_score, exact_score, mro_scores, sig_score)
         matches.append(Match(score, func, sig))
     matches = sorted(matches, key=lambda m: m.score, reverse=True)
     matches = [m for m in matches if m.score == matches[0].score]
-    # print(tuple((m.func.__name__, m.score) for m in matches if m.func))
     if len(matches) > 1:
         # A tie may occur because some of the argument matches are not due to concrete
         # inheritance, i.e., when the declared types have overridden `__subclasscheck__()`.
@@ -344,6 +356,8 @@ class OverloadingError(Exception):
 
 
 def unwrap(func):
+    while hasattr(func, '__func__'):
+        func = func.__func__
     while hasattr(func, '__wrapped__'):
         func = func.__wrapped__
     return func
@@ -359,17 +373,14 @@ def is_void(func):
         source = inspect.getsource(func)
     except (OSError, IOError):
         return False
-    indent = re.match('\s*', source).group()
+    indent = re.match(r'\s*', source).group()
     if indent:
         source = re.sub('^' + indent, '', source, flags=re.M)
     fdef = next(ast.iter_child_nodes(ast.parse(source)))
-    if (
+    return (
       type(fdef) is ast.FunctionDef and len(fdef.body) == 1 and
       type(fdef.body[0]) is ast.Expr and
-      type(fdef.body[0].value) in {ast.Str, ast.Ellipsis}):
-        return True
-    else:
-        return False
+      type(fdef.body[0].value) in {ast.Str, ast.Ellipsis})
 
 
 def update_docstring(dispatcher, argspec, use_argspec):
