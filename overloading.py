@@ -1,7 +1,15 @@
 """
-    overloading.py -- function overloading for Python 3
-    Copyright: 2014–2016 Kalle Tuure
-    License: MIT
+--------------
+overloading.py
+--------------
+
+Function overloading for Python 3
+
+* Project website: https://github.com/bintoro/overloading.py
+* Documentation: https://overloading.readthedocs.org/
+
+Copyright © 2014–2016 Kalle Tuure. Released under the MIT License.
+
 """
 
 __version__ = '0.5.0'
@@ -38,6 +46,10 @@ DEBUG = False
 
 
 def overload(func):
+    """
+    May be used as a shortcut for ``overloaded`` and ``overloads(f)``
+    when the overloaded function `f` can be automatically identified.
+    """
     if sys.version_info < (3, 3):
         raise OverloadingError("The 'overload' syntax requires Python version 3.3 or higher.")
     true_func = unwrap(func)
@@ -54,6 +66,9 @@ def overload(func):
 
 
 def overloaded(func):
+    """
+    Introduces a new overloaded function and registers its first implementation.
+    """
     true_func = unwrap(func)
     ensure_function(true_func)
     def dispatcher(*args, **kwargs):
@@ -95,6 +110,10 @@ def overloaded(func):
 
 
 def overloads(dispatcher, hook=None):
+    """
+    Returns a callable that registers its argument as an implementation
+    of a previously declared overloaded function.
+    """
     return partial(register, dispatcher, hook=hook)
 
 
@@ -113,6 +132,9 @@ _empty = object()
 
 
 def register(dispatcher, func, *, hook=None):
+    """
+    Registers `func` as an implementation on `dispatcher`.
+    """
     wrapper = lambda x: x
     if isinstance(func, (classmethod, staticmethod)):
         wrapper = type(func)
@@ -176,6 +198,10 @@ Match = namedtuple('Match', 'score, func, sig')
 
 
 def find(dispatcher, args, kwargs):
+    """
+    Given the arguments contained in `args` and `kwargs`, returns the best match
+    from the list of implementations registered on `dispatcher`.
+    """
     matches = [Match((-1,), None, None)]
     maxlen = max(len(f[2]) for f in dispatcher.__functions)
     for func, argspec, sig, defaults in dispatcher.__functions:
@@ -311,7 +337,9 @@ def get_type_signature(func, *, required_only=False):
 
 
 def normalize_type(type_, _level=0):
-    """Reduces an arbitrarily complex type declaration into something manageable."""
+    """
+    Reduces an arbitrarily complex type declaration into something manageable.
+    """
     _level += 1
     if not typing or not isinstance(type_, typing.TypingMeta) or type_ is typing.Any:
         return type_
@@ -347,11 +375,16 @@ def sig_cmp(sig1, sig2):
 
 
 def error(name):
+    """
+    Raises a `TypeError` when a call to an overloaded function
+    doesn't match any implementation.
+    """
     raise TypeError("Invalid type or number of arguments{0}."
                     .format(" when calling '%s'" % name if name else ''))
 
 
 class OverloadingError(Exception):
+    """Raised during function setup when something goes wrong"""
     pass
 
 
@@ -369,6 +402,11 @@ def ensure_function(func):
 
 
 def is_void(func):
+    """
+    Determines if a function is a void function, i.e., one whose body contains
+    nothing but a docstring or an ellipsis. A void function can be used to introduce
+    an overloaded function without actually registering an implementation.
+    """
     try:
         source = inspect.getsource(func)
     except (OSError, IOError):
@@ -384,6 +422,11 @@ def is_void(func):
 
 
 def update_docstring(dispatcher, argspec, use_argspec):
+    """
+    Inserts a call signature at the beginning of the docstring on `dispatcher`.
+    If `use_argspec` is true, the signature is that given by `argspec`; otherwise
+    `(...)` is used.
+    """
     doc = dispatcher.__doc__ or ''
     if inspect.cleandoc(doc).startswith('%s(' % dispatcher.__name__):
         return
