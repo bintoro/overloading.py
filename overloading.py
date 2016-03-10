@@ -444,6 +444,24 @@ def get_full_name(obj):
     return obj.__module__ + '.' + obj.__qualname__
 
 
+__subclass_check_cache = {}
+
+
+def _issubclass(t1, t2):
+    """A cached version of ``issubclass()``.
+
+    For generics, the relation is evaluated using the origins to make
+    sure the types are parameterized with type variables, not types.
+    """
+    try:
+        return __subclass_check_cache[(t1, t2)]
+    except KeyError:
+        _t1 = getattr(t1, '__origin__', None) or t1
+        _t2 = getattr(t2, '__origin__', None) or t2
+        res = __subclass_check_cache[(t1, t2)] = issubclass(_t1, _t2)
+        return res
+
+
 def find_most_derived(items, index=None):
     """Finds the most derived type in `items`.
 
@@ -453,14 +471,14 @@ def find_most_derived(items, index=None):
     best = object
     if index is None:
         for type_ in items:
-            if type_ is not best and issubclass(type_, best):
+            if type_ is not best and _issubclass(type_, best):
                 best = type_
         return best
     else:
         result = []
         for e in items:
             type_ = e[index]
-            if issubclass(type_, best):
+            if _issubclass(type_, best):
                 if type_ is not best:
                     result = []
                     best = type_

@@ -519,6 +519,8 @@ def test_typing_tuple():
     for _ in range(rounds):
         assert f((1, b)) == (int, str)
         assert f((a, 2)) == (str, int)
+        with pytest.raises(TypeError):
+            f((1, 2))
 
     @overloaded
     def f(arg: Tuple[int, ...]):
@@ -560,6 +562,45 @@ def test_typing_type_var():
     assert f([1, 2, 3]) == N
     assert f([a, b, c]) == M
     assert f(Foo()) == 'Hello'
+
+
+@requires_typing
+def test_typing_parameterized_collections():
+
+    @overloaded
+    def f(arg: Iterable[int]):
+        return Iterable[int]
+
+    @overloads(f)
+    def f(arg: Iterable[str]):
+        return Iterable[str]
+
+    @overloads(f)
+    def f(arg: Sequence[int]):
+        return Sequence[int]
+
+    @overloads(f)
+    def f(arg: Sequence[str]):
+        return Sequence[str]
+
+    for _ in range(rounds):
+        assert f({1, 2, 3}) == Iterable[int]
+        assert f({a, b, c}) == Iterable[str]
+        assert f([1, 2, 3]) == Sequence[int]
+        assert f([a, b, c]) == Sequence[str]
+
+    @overloaded
+    def f(arg: Iterable[X]):
+        return Iterable[X]
+
+    @overloads(f)
+    def f(arg: Iterable[Y]):
+        return Iterable[Y]
+
+    for _ in range(rounds):
+        assert f({x, x, x}) == Iterable[X]
+        assert f({y, y, y}) == Iterable[Y]
+        assert f([z, z, z]) == Iterable[Y]
 
 
 def test_named():
