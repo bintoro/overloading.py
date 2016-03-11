@@ -899,13 +899,13 @@ def test_errors():
         def f(foo:int, bar):
             pass
 
-    # Recurring `*args`
+    # Recurring signature with `*args`
     with pytest.raises(OverloadingError):
         @overloaded
-        def f(*args):
+        def f(foo, *args):
             pass
         @overloads(f)
-        def f(foo, bar:int, *args):
+        def f(foo, bar=None, *args):
             pass
 
     # `overloads` without `overloaded`

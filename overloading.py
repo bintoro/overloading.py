@@ -78,7 +78,7 @@ def overloaded(func):
                          tuple(sorted((name, type(arg)) for (name, arg) in kwargs.items())))
             resolved = dispatcher.__cache.get(cache_key)
         if not resolved:
-            resolved = find(dispatcher, args, kwargs) or dispatcher.__default
+            resolved = find(dispatcher, args, kwargs)
             if resolved and dispatcher.__cacheable:
                 dispatcher.__cache[cache_key] = resolved
         if resolved:
@@ -95,7 +95,6 @@ def overloaded(func):
     dispatcher.__dict__.update(
         __functions = [],
         __hooks = {},
-        __default = None,
         __cache = {},
         __cacheable = True
     )
@@ -157,34 +156,21 @@ def register(dispatcher, func, *, hook=None):
             defaults = {k: v for k, v in zip(argspec.args[-len(argspec.defaults):], argspec.defaults)}
         else:
             defaults = {}
-        if argspec.varargs:
-            # The presence of a catch-all variable for positional arguments
-            # indicates that this function should be treated as the fallback.
-            if dispatcher.__default:
+        for i, type_ in enumerate(sig_full):
+            if not isinstance(type_, type):
                 raise OverloadingError(
-                  "Failed to overload function '{0}': multiple function definitions "
-                  "contain a catch-all variable for positional arguments."
-                  .format(dispatcher.__name__))
-            dispatcher.__default = func
-        else:
-            for i, type_ in enumerate(sig_full):
-                if not isinstance(type_, type) and type_ not in (_empty, None):
-                    raise OverloadingError(
-                      "Failed to overload function '{0}': parameter '{1}' has "
-                      "an annotation that is not a type."
-                      .format(dispatcher.__name__, argspec.args[i]))
-            for fninfo in dispatcher.__functions:
-                if fninfo.func is dispatcher.__default:
-                    continue
-                if sig_cmp(sig_rqd, get_type_signature(fninfo.func, required_only=True)):
-                    msg = "non-unique signature [%s]." % \
-                        str.join(', ', (repr(t) if t is not _empty else '<any type>'
-                                        for t in sig_rqd))
-                    raise OverloadingError("Failed to overload function '{0}': {1}"
-                                           .format(dispatcher.__name__, msg))
+                  "Failed to overload function '{0}': parameter '{1}' has "
+                  "an annotation that is not a type."
+                  .format(dispatcher.__name__, argspec.args[i]))
+        for fninfo in dispatcher.__functions:
+            if sig_cmp(sig_rqd, get_type_signature(fninfo.func, required_only=True)) \
+              and bool(argspec.varargs) == bool(fninfo.argspec.varargs):
+                raise OverloadingError(
+                  "Failed to overload function '{0}': non-unique signature ({1})."
+                  .format(dispatcher.__name__, str.join(', ', (_repr(t) for t in sig_rqd))))
         # All clear; register the function.
         dispatcher.__functions.append(FunctionInfo(func, argspec, sig_full, defaults))
-        if typing and any((isinstance(t, typing.TypingMeta) for t in sig_rqd)):
+        if typing and any((isinstance(t, typing.TypingMeta) and t is not AnyType for t in sig_rqd)):
             dispatcher.__cacheable = False
     if func.__name__ == dispatcher.__name__:
         # The returned function is going to be bound to the invocation name
@@ -202,17 +188,21 @@ def find(dispatcher, args, kwargs):
     Given the arguments contained in `args` and `kwargs`, returns the best match
     from the list of implementations registered on `dispatcher`.
     """
-    matches = [Match((-1,), None, None)]
+    matches = []
     maxlen = max(len(f[2]) for f in dispatcher.__functions)
     for func, argspec, sig, defaults in dispatcher.__functions:
-        # Filter out keyword arguments that will be consumed by a catch-all parameter
+        # Filter out arguments that will be consumed by catch-all parameters
         # or by keyword-only parameters.
-        if argspec.varkw or argspec.kwonlyargs:
-            true_kwargs = {kw: kwargs[kw] for kw in argspec.args if kw in kwargs}
+        if argspec.varargs:
+            _args = args[:len(sig)]
         else:
-            true_kwargs = kwargs
-        kwarg_set = set(true_kwargs)
-        arg_count = len(args) + len(true_kwargs)
+            _args = args
+        if argspec.varkw or argspec.kwonlyargs:
+            _kwargs = {kw: kwargs[kw] for kw in argspec.args if kw in kwargs}
+        else:
+            _kwargs = kwargs
+        kwarg_set = set(_kwargs)
+        arg_count = len(_args) + len(_kwargs)
         optional_count = len(defaults)
         required_count = len(argspec.args) - optional_count
         # Consider candidate functions that satisfy basic conditions:
@@ -222,21 +212,22 @@ def find(dispatcher, args, kwargs):
             continue
         if not kwarg_set <= set(argspec.args):
             continue
-        args_by_key = {k: v for k, v in zip(argspec.args, args)}
+        args_by_key = {k: v for k, v in zip(argspec.args, _args)}
         if set(args_by_key) & kwarg_set:
             raise TypeError("%s() got multiple values for the same parameter"
                             % dispatcher.__name__)
-        args_by_key.update(true_kwargs)
+        args_by_key.update(_kwargs)
         arg_score = arg_count # >= 0
         type_score = 0
         exact_score = 0
         mro_scores = [0] * maxlen
         sig_score = required_count
+        var_score = -bool(argspec.varargs)
         for argname, value in args_by_key.items():
             match = False
             param_pos = argspec.args.index(argname)
             expected_type = sig[param_pos]
-            if expected_type is not _empty:
+            if expected_type is not AnyType:
                 if value is None and defaults.get(argname, _empty) is None:
                     # Optional parameter got explicit None.
                     match = True
@@ -263,7 +254,7 @@ def find(dispatcher, args, kwargs):
                         else:
                             match = True
                         if not match:
-                            arg_score = -2
+                            arg_score = -1
                             break
                     else:
                         match = True
@@ -284,11 +275,11 @@ def find(dispatcher, args, kwargs):
                     mro_scores[param_pos] = -mro_index
                 else:
                     # Discard immediately on type mismatch.
-                    arg_score = -2
+                    arg_score = -1
                     break
         if arg_score < 0:
             continue
-        score = (arg_score, type_score, exact_score, mro_scores, sig_score)
+        score = (arg_score, type_score, exact_score, mro_scores, sig_score, var_score)
         matches.append(Match(score, func, sig))
     matches = sorted(matches, key=lambda m: m.score, reverse=True)
     matches = [m for m in matches if m.score == matches[0].score]
@@ -312,12 +303,11 @@ def find(dispatcher, args, kwargs):
                 if len(match_indices) == 1:
                     break
             matches = [matches[i] for i in match_indices]
-    if len(matches) > 1:
-        # Give priority to non-default functions.
-        matches = [m for m in matches if m.func is not dispatcher.__default]
-    if DEBUG:
-        assert len(matches) == 1, [(m.sig, m.score) for m in matches]
-    return matches[0].func
+    if matches:
+        matches = sorted(matches, key=lambda m: m.score, reverse=True)
+        return matches[0].func
+    else:
+        return None
 
 
 def get_type_signature(func, *, required_only=False):
@@ -333,7 +323,7 @@ def get_type_signature(func, *, required_only=False):
         params = argspec.args[:-len(argspec.defaults)]
     else:
         params = argspec.args
-    return tuple(normalize_type(type_hints.get(param, _empty)) for param in params)
+    return tuple(normalize_type(type_hints.get(param, AnyType)) for param in params)
 
 
 def normalize_type(type_, _level=0):
@@ -341,7 +331,7 @@ def normalize_type(type_, _level=0):
     Reduces an arbitrarily complex type declaration into something manageable.
     """
     _level += 1
-    if not typing or not isinstance(type_, typing.TypingMeta) or type_ is typing.Any:
+    if not typing or not isinstance(type_, typing.TypingMeta) or type_ is AnyType:
         return type_
     if isinstance(type_, typing.TypeVar):
         return type_
@@ -372,6 +362,21 @@ def sig_cmp(sig1, sig2):
     Compares two normalized type signatures for validation purposes.
     """
     return sig1 == sig2
+
+
+class AnyTypeMeta(type):
+    def __subclasscheck__(self, cls):
+        if not isinstance(cls, type):
+            return super().__subclasscheck__(cls)
+        return True
+
+
+class AnyType(metaclass=AnyTypeMeta):
+    pass
+
+
+if typing:
+    AnyType = typing.Any
 
 
 def error(name):
@@ -484,4 +489,10 @@ def find_most_derived(items, index=None):
                     best = type_
                 result.append(e)
         return result
+
+
+def _repr(type_):
+    if type_ is AnyType:
+        return '<any type>'
+    return repr(type_)
 
