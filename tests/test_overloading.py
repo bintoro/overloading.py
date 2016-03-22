@@ -7,11 +7,12 @@ import pytest
 import overloading
 from overloading import *
 from overloading import OverloadingError, typing
+from overloading import TypeComparator
 
 if typing:
     from typing import (
         Any, Callable, Generic, Optional, TypeVar, Union, Tuple,
-        Sequence, Iterable)
+        MutableSequence, Sequence, Iterable)
 
 
 __all__ = ['rounds', 'decorated',
@@ -323,6 +324,101 @@ def test_nodefault():
             f(1, 2, 3)
 
     assert len(f.__cache) == 2
+
+
+def test_type_comparator():
+
+    assert TypeComparator(Z)               < TypeComparator(Y)        < TypeComparator(X)
+    assert TypeComparator(MutableSequence) < TypeComparator(Sequence) < TypeComparator(Iterable)
+
+    assert TypeComparator(Iterable[Y]) < TypeComparator(Iterable[X])
+    assert TypeComparator(Iterable[X]) > TypeComparator(Iterable[Y])
+
+    assert not TypeComparator(Iterable[str]) > TypeComparator(Iterable[int])
+    assert not TypeComparator(Iterable[str]) < TypeComparator(Iterable[int])
+
+
+def test_function_ordering_1():
+
+    with pytest.raises(OverloadingError):
+
+        @overloaded
+        def f(foo, bar:X=None):
+            return (Any, X)
+
+        @overloads(f)
+        def f(foo, bar:dict=None):
+            return (Any, dict)
+
+    # Order can be resolved by either including `*args` or dropping the defaults.
+
+    @overloaded
+    def g(foo, bar:X=None, *args):
+        return (Any, X)
+
+    @overloads(g)
+    def g(foo, bar:dict=None):
+        return (Any, dict)
+
+    @overloaded
+    def h(foo, bar:X):
+        return (Any, X)
+
+    @overloads(h)
+    def h(foo, bar:dict):
+        return (Any, dict)
+
+    for _ in range(rounds):
+        assert g(1)     == (Any, dict)
+        assert g(1, x)  == (Any, X)
+        assert g(1, y)  == (Any, X)
+        assert h(1, x)  == (Any, X)
+        assert h(1, {}) == (Any, dict)
+
+
+def test_function_ordering_2():
+
+    @overloaded
+    def f(i: X, j: Y):
+        return (X, Y)
+
+    @overloads(f)
+    def f(i: Sequence, j: X):
+        return (Sequence, X)
+
+    @overloads(f)
+    def f(i: Y, j: X):
+        return (Y, X)
+
+    @overloads(f)
+    def f(i: int, j: X):
+        return (int, X)
+
+    @overloads(f)
+    def f(i: Iterable, j: X):
+        return (Iterable, X)
+
+    @overloads(f)
+    def f(i: int, j: Z):
+        return (int, Z)
+
+    @overloads(f)
+    def f(i: Iterable, j: Y):
+        return (Iterable, Y)
+
+    @overloads(f)
+    def f(i: X, j: Z):
+        return (X, Z)
+
+    @overloads(f)
+    def f(i: int, j: Y):
+        return (int, Y)
+
+    for _ in range(rounds):
+        assert f(z,  z) == (X, Z)
+        assert f(y,  y) == (Y, X)
+        assert f({}, z) == (Iterable, Y)
+        assert f(1,  y) == (int, Y)
 
 
 def test_arg_subtyping_1():

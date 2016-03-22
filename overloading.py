@@ -19,9 +19,10 @@ __all__ = ['overload', 'overloaded', 'overloads']
 
 
 import ast
-from collections import namedtuple
+from collections import namedtuple, deque
 from functools import partial
 import inspect
+from itertools import chain
 import re
 import sys
 import types
@@ -172,6 +173,7 @@ def register(dispatcher, func, *, hook=None):
         dispatcher.__functions.append(FunctionInfo(func, argspec, sig_full, defaults))
         if typing and any((isinstance(t, typing.TypingMeta) and t is not AnyType for t in sig_rqd)):
             dispatcher.__cacheable = False
+        order_functions(dispatcher.__functions)
     if func.__name__ == dispatcher.__name__:
         # The returned function is going to be bound to the invocation name
         # in the calling scope, so keep returning the dispatcher.
@@ -189,8 +191,7 @@ def find(dispatcher, args, kwargs):
     from the list of implementations registered on `dispatcher`.
     """
     matches = []
-    maxlen = max(len(f[2]) for f in dispatcher.__functions)
-    for func, argspec, sig, defaults in dispatcher.__functions:
+    for func_index, (func, argspec, sig, defaults) in enumerate(dispatcher.__functions):
         # Filter out arguments that will be consumed by catch-all parameters
         # or by keyword-only parameters.
         if argspec.varargs:
@@ -220,7 +221,7 @@ def find(dispatcher, args, kwargs):
         arg_score = arg_count # >= 0
         type_score = 0
         exact_score = 0
-        mro_scores = [0] * maxlen
+        order_score = -func_index
         sig_score = required_count
         var_score = -bool(argspec.varargs)
         for argname, value in args_by_key.items():
@@ -249,7 +250,8 @@ def find(dispatcher, args, kwargs):
                             elif len(value) == len(params):
                                 match = all(issubclass(type(v), t) for v, t in zip(value, params))
                         elif issubclass(expected_type, typing.Iterable):
-                            if issubclass(type(next(iter(value))), expected_type.__parameters__[0]):
+                            if len(value) == 0 \
+                              or issubclass(type(next(iter(value))), expected_type.__parameters__[0]):
                                 match = True
                         else:
                             match = True
@@ -262,52 +264,116 @@ def find(dispatcher, args, kwargs):
                         type_score += 1
                     if _type is expected_type:
                         exact_score += 1
-                    # Compute a rank for how close the match is in terms of
-                    # the type hierarchy.
-                    try:
-                        mro_index = _type.__mro__.index(expected_type)
-                    except ValueError:
-                        # The expected type was not part of the MRO. This can only
-                        # happen when the declared type has a metaclass with a custom
-                        # implementation of `__subclasscheck__()`. The position is
-                        # given a rank of -99, and a possible tie is resolved later.
-                        mro_index = 99
-                    mro_scores[param_pos] = -mro_index
                 else:
                     # Discard immediately on type mismatch.
                     arg_score = -1
                     break
         if arg_score < 0:
             continue
-        score = (arg_score, type_score, exact_score, mro_scores, sig_score, var_score)
+        score = (arg_score, type_score, exact_score, sig_score, var_score, order_score)
         matches.append(Match(score, func, sig))
-    matches = sorted(matches, key=lambda m: m.score, reverse=True)
-    matches = [m for m in matches if m.score == matches[0].score]
-    if len(matches) > 1:
-        # A tie may occur because some of the argument matches are not due to concrete
-        # inheritance, i.e., when the declared types have overridden `__subclasscheck__()`.
-        # We'll establish a ranking among the declared types at each applicable parameter
-        # position, and the function whose signature produces a unique most derived type
-        # at the earliest position wins.
-        type_matrix = list(filter(bool,
-                        ([ (match_idx, match.sig[param_pos])
-                           for param_pos, mro_score in enumerate(match.score[3])
-                           if mro_score == -99
-                         ] for match_idx, match in enumerate(matches))))
-        if type_matrix:
-            match_indices = set(range(len(type_matrix)))
-            for types_ in zip(*type_matrix):
-                # We're iterating over argument positions.
-                # Elements in `types_` are (<match index>, <type>) tuples.
-                match_indices &= set([t[0] for t in find_most_derived(types_, index=1)])
-                if len(match_indices) == 1:
-                    break
-            matches = [matches[i] for i in match_indices]
     if matches:
         matches = sorted(matches, key=lambda m: m.score, reverse=True)
         return matches[0].func
     else:
         return None
+
+
+def order_functions(functions):
+    """
+    Orders a list of implementations in place according to the type hierarchies
+    found at each parameter position.
+    """
+    fn_count = len(functions)
+    if fn_count < 2:
+        return
+    maxlen = max(len(fninfo.sig) for fninfo in functions)
+    next_blocks = [len(functions)]
+    for param_pos in range(maxlen):
+        blocks, next_blocks = next_blocks, []
+        slice_ = slice(0)
+        for block_length in blocks:
+            slice_ = slice(slice_.stop, slice_.stop + block_length)
+            types_ = tuple(fninfo.sig[param_pos] if len(fninfo.sig) > param_pos else NoType
+                           for fninfo in functions[slice_])
+            groups = group_types(types_)
+            if len(groups) > 0:
+                functions[slice_] = [functions[slice_.start + i] for i in chain(*groups)]
+                assert len(functions) == fn_count
+            next_blocks.extend(len(group) for group in groups)
+    functions.sort(key=partial(get_signature_comparator, maxlen=maxlen))
+
+
+def group_types(types_):
+    """
+    Categorizes the supplied types into groups of related types. The returned groups
+    consist of indexes referring to the original list.
+    """
+    groups = []
+    for i, t in enumerate(types_):
+        for group in groups:
+            least_derived = types_[group[-1]]
+            if _issubclass(t, least_derived, True):
+                group.appendleft(i)
+                break
+            elif _issubclass(least_derived, t, True):
+                group.append(i)
+                break
+        else:
+            groups.append(deque((i,)))
+    return groups
+
+
+def get_signature_comparator(fninfo, maxlen):
+    return tuple(chain(
+        (TypeComparator(type_) for type_ in fninfo.sig),
+        (TypeComparator(NoType),) * (maxlen - len(fninfo.sig)),
+        (bool(fninfo.argspec.varargs),)
+    ))
+
+
+class TypeComparatorMeta(type):
+    """
+    Ensures `TypeComparator` is initialized just once for any given type.
+    """
+    def __call__(cls, type_):
+        try:
+            return cls._registry[type_]
+        except KeyError:
+            instance = cls._registry[type_] = type.__call__(cls, type_)
+            return instance
+
+
+class TypeComparator(metaclass=TypeComparatorMeta):
+    """
+    A comparator object for ordering types according to the `issubclass()` relation.
+    """
+    _registry = {}
+
+    def __init__(self, type_):
+        self.type = type_
+        self._cache = {}
+
+    def __repr__(self):
+        return 'TypeComparator(%s)' % self.type.__name__
+
+    def __eq__(self, other):
+        return self is other
+
+    def __ne__(self, other):
+        return self is not other
+
+    def __lt__(self, other):
+        return self is not other and _issubclass(self.type, other.type)
+
+    def __gt__(self, other):
+        return self is not other and _issubclass(other.type, self.type)
+
+    def __le__(self, other):
+        return _issubclass(self.type, other.type)
+
+    def __ge__(self, other):
+        return _issubclass(other.type, self.type)
 
 
 def get_type_signature(func, *, required_only=False):
@@ -377,6 +443,17 @@ class AnyType(metaclass=AnyTypeMeta):
 
 if typing:
     AnyType = typing.Any
+
+
+class NoTypeMeta(type):
+    def __subclasscheck__(self, cls):
+        if not isinstance(cls, type):
+            return super().__subclasscheck__(cls)
+        return False
+
+
+class NoType(metaclass=NoTypeMeta):
+    pass
 
 
 def error(name):
@@ -452,18 +529,27 @@ def get_full_name(obj):
 __subclass_check_cache = {}
 
 
-def _issubclass(t1, t2):
-    """A cached version of ``issubclass()``.
+def _issubclass(t1, t2, use_origin=False):
+    """An enhanced version of ``issubclass()``.
 
-    For generics, the relation is evaluated using the origins to make
-    sure the types are parameterized with type variables, not types.
+    Specifying ``use_origin=True`` causes the relation to be evaluated using
+    the types' origins if available. Essentially this means deparameterizing
+    constrained generics back into their type variable -using forms.
     """
+    cache_key = (t1, t2, use_origin)
     try:
-        return __subclass_check_cache[(t1, t2)]
+        return __subclass_check_cache[cache_key]
     except KeyError:
-        _t1 = getattr(t1, '__origin__', None) or t1
-        _t2 = getattr(t2, '__origin__', None) or t2
-        res = __subclass_check_cache[(t1, t2)] = issubclass(_t1, _t2)
+        if t1 is AnyType:
+            res = False
+        elif t1 is NoType:
+            res = True
+        else:
+            if use_origin:
+                t1 = getattr(t1, '__origin__', None) or t1
+                t2 = getattr(t2, '__origin__', None) or t2
+            res = issubclass(t1, t2)
+        __subclass_check_cache[cache_key] = res
         return res
 
 
