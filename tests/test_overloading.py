@@ -13,6 +13,8 @@ if typing:
     from typing import (
         Any, Callable, Generic, Optional, TypeVar, Union, Tuple,
         MutableSequence, Sequence, Iterable)
+else:
+    from collections import Sequence, Iterable
 
 
 __all__ = ['rounds', 'decorated',
@@ -24,7 +26,7 @@ min33 = pytest.mark.skipif(sys.version_info < (3, 3), reason="'overload' require
 requires_typing = pytest.mark.skipif(not typing, reason="'typing' module required")
 
 
-rounds = 100
+rounds = 3
 
 a, b, c, d, w = 'a', 'b', 'c', 'd', None
 
@@ -133,19 +135,36 @@ def test_optional(typing):
 
     @overloaded
     def f(foo, bar:int=None, baz:str=None):
-        return ('any', 'optional int', 'optional str')
+        return 1
 
     @overloads(f)
     def f(foo, bar:int):
-        return ('any', 'int')
+        return 2
 
     for _ in range(rounds):
-        assert f(a, 1)       == ('any', 'int')
-        assert f(a)          == ('any', 'optional int', 'optional str')
-        assert f(a, None)    == ('any', 'optional int', 'optional str')
-        assert f(a, 1, None) == ('any', 'optional int', 'optional str')
-        assert f(a, None, c) == ('any', 'optional int', 'optional str')
-        assert f(a, 1,    c) == ('any', 'optional int', 'optional str')
+        assert f(a, 1)       == 2
+        assert f(a)          == 1
+        assert f(a, None)    == 1
+        assert f(a, 1, None) == 1
+        assert f(a, None, c) == 1
+        assert f(a, 1,    c) == 1
+
+    if not typing:
+        return
+
+    @overloaded
+    def f(foo, bar:Optional[int], baz:Optional[str]):
+        return 1
+
+    @overloads(f)
+    def f(foo, bar:int):
+        return 2
+
+    for _ in range(rounds):
+        assert f(a, 1)       == 2
+        assert f(a, 1, None) == 1
+        assert f(a, None, c) == 1
+        assert f(a, 1,    c) == 1
 
 
 def test_kwargs_1():
@@ -332,36 +351,36 @@ def test_function_ordering_1():
 
         @overloaded
         def f(foo, bar:X=None):
-            return (Any, X)
+            pass
 
         @overloads(f)
         def f(foo, bar:dict=None):
-            return (Any, dict)
+            pass
 
     # Order can be resolved by either including `*args` or dropping the defaults.
 
     @overloaded
     def g(foo, bar:X=None, *args):
-        return (Any, X)
+        return 1
 
     @overloads(g)
     def g(foo, bar:dict=None):
-        return (Any, dict)
+        return 2
 
     @overloaded
     def h(foo, bar:X):
-        return (Any, X)
+        return 3
 
     @overloads(h)
     def h(foo, bar:dict):
-        return (Any, dict)
+        return 4
 
     for _ in range(rounds):
-        assert g(1)     == (Any, dict)
-        assert g(1, x)  == (Any, X)
-        assert g(1, y)  == (Any, X)
-        assert h(1, x)  == (Any, X)
-        assert h(1, {}) == (Any, dict)
+        assert g(1)     == 2
+        assert g(1, x)  == 1
+        assert g(1, y)  == 1
+        assert h(1, x)  == 3
+        assert h(1, {}) == 4
 
 
 def test_function_ordering_2():
@@ -519,13 +538,6 @@ def test_arg_subtyping_4():
         assert f(z, z, z, z) == ('Y', 'Z', 'X', 'Z')
 
 
-def test_type_ordering():
-
-    assert overloading.find_most_derived([X, Z, Y, Z, X, Y]) == Z
-    assert overloading.find_most_derived(
-        [(X, 1), (Z, 2), (Y, 3), (Z, 4), (X, 5), (Y, 6)], index=0) == [(Z, 2), (Z, 4)]
-
-
 def test_abc():
 
     Iterable = collections.Iterable
@@ -652,6 +664,9 @@ def test_typing_type_var():
     class Foo(Generic[T, M]):
         pass
 
+    class Bar(Foo[int, str]):
+        pass
+
     @overloaded
     def f(arg: Sequence[N]):
         return N
@@ -661,12 +676,17 @@ def test_typing_type_var():
         return M
 
     @overloads(f)
-    def f(arg: Foo[int, str]):
-        return 'Hello'
+    def f(arg: Foo):
+        return Foo
+
+    @overloads(f)
+    def f(arg: Bar):
+        return Bar
 
     assert f([1, 2, 3]) == N
     assert f([a, b, c]) == M
-    assert f(Foo()) == 'Hello'
+    assert f(Foo()) == Foo
+    assert f(Bar()) == Bar
 
 
 @requires_typing
@@ -706,6 +726,49 @@ def test_typing_parameterized_collections():
         assert f({x, x, x}) == Iterable[X]
         assert f({y, y, y}) == Iterable[Y]
         assert f([z, z, z]) == Iterable[Y]
+
+
+@requires_typing
+def test_typing_union():
+
+    @overloaded
+    def f(arg: Union[Tuple[int, ...], int]):
+        return 1
+
+    @overloads(f)
+    def f(arg: Sequence[int]):
+        return 2
+
+    for _ in range(rounds):
+        assert f((1, 2, 3)) == 1
+
+    @overloaded
+    def f(arg: Sequence):
+        return 1
+
+    @overloads(f)
+    def f(arg: Union[Sequence[int], Tuple[int]]):
+        return 2
+
+    @overloads(f)
+    def f(arg: Union[Iterable[int], MutableSequence[int]]):
+        return 3
+
+    for _ in range(rounds):
+        assert f((1, 2, 3)) == 2
+        assert f([1, 2, 3]) == 3
+
+    @overloaded
+    def f(arg: Tuple[Union[int, float], int]):
+        return 1
+
+    @overloads(f)
+    def f(arg: Tuple[str, int]):
+        return 2
+
+    for _ in range(rounds):
+        assert f((1, 2)) == 1
+        assert f((a, 2)) == 2
 
 
 def test_named():
@@ -1032,5 +1095,36 @@ def test_errors():
             pass
         @overloads(f)
         class Foo:
+            pass
+
+
+@requires_typing
+def test_errors_typing():
+
+    # Recurring signature with `Union`
+    with pytest.raises(OverloadingError):
+        @overloaded
+        def f(arg: Union[str, Iterable[int]]):
+            pass
+        @overloads(f)
+        def f(arg: Union[int, Iterable[int]]):
+            pass
+
+    # Recurring signature with `Optional`
+    with pytest.raises(OverloadingError):
+        @overloaded
+        def f(foo, bar:Optional[int]):
+            pass
+        @overloads(f)
+        def f(foo, bar:int):
+            pass
+
+    # Recurring signature with `Optional`
+    with pytest.raises(OverloadingError):
+        @overloaded
+        def f(foo, bar:Optional[int]):
+            pass
+        @overloads(f)
+        def f(foo, bar:Optional[str]):
             pass
 

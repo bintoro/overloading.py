@@ -165,11 +165,11 @@ def register(dispatcher, func, *, hook=None):
                   "an annotation that is not a type."
                   .format(dp.__name__, argspec.args[i]))
         for fninfo in dp.__functions:
-            if sig_cmp(sig_rqd, get_type_signature(fninfo.func, required_only=True)) \
-              and bool(argspec.varargs) == bool(fninfo.argspec.varargs):
+            dup_sig = sig_cmp(sig_rqd, get_type_signature(fninfo.func, required_only=True))
+            if dup_sig and bool(argspec.varargs) == bool(fninfo.argspec.varargs):
                 raise OverloadingError(
                   "Failed to overload function '{0}': non-unique signature ({1})."
-                  .format(dp.__name__, str.join(', ', (_repr(t) for t in sig_rqd))))
+                  .format(dp.__name__, str.join(', ', (_repr(t) for t in dup_sig))))
         # All clear; register the function.
         dp.__functions.append(FunctionInfo(func, argspec, sig_full, defaults))
         dp.__maxlen = max(dp.__maxlen, len(sig_full))
@@ -185,11 +185,13 @@ def register(dispatcher, func, *, hook=None):
 
 Match = namedtuple('Match', 'score, func, sig')
 
-SP_DEFAULT = -1000
-SP_ANY = -500
-SP_D_TYPING = -100
-SP_D_TYPING_TUPLE = +50
-SP_D_ABSTRACT = -100
+SP_DEFAULT = -100
+SP_ANY = 0
+SP_TYPE = 200
+SP_ABSTRACT = 100
+SP_TYPING = 100
+SP_TYPING_TUPLE = 150
+
 
 def find(dispatcher, args, kwargs):
     """
@@ -227,84 +229,92 @@ def find(dispatcher, args, kwargs):
         arg_score = arg_count # >= 0
         type_score = 0
         exact_score = 0
-        specificity_score = [(SP_DEFAULT, 0)] * dispatcher.__maxlen
+        specificity_score = [None] * dispatcher.__maxlen
         sig_score = required_count
         var_score = -bool(argspec.varargs)
         for argname, value in args_by_key.items():
-            match = False
             param_pos = argspec.args.index(argname)
-            expected_type = sig[param_pos]
-            expected_type_param = None
-            type_specificity = 0
-            if expected_type is not AnyType:
-                if value is None and defaults.get(argname, _empty) is None:
-                    # Optional parameter got explicit None.
-                    match = True
-                    expected_type = type(None)
-                _type = type(value)
-                if issubclass(_type, expected_type):
-                    if typing and isinstance(expected_type, typing.TypingMeta):
-                        type_specificity += SP_D_TYPING
-                        if issubclass(expected_type, typing.Union):
-                            match = True
-                            types = [t for t in expected_type.__union_params__ if issubclass(_type, t)]
-                            if len(types) > 1:
-                                expected_type = find_most_derived(types)
-                            else:
-                                expected_type = types[0]
-                        elif issubclass(expected_type, typing.Tuple):
-                            type_specificity += SP_D_TYPING_TUPLE
-                            # TODO: Unparameterized `Tuple`
-                            params = expected_type.__tuple_params__
-                            expected_type_param = params[0]
-                            if expected_type.__tuple_use_ellipsis__:
-                                match = all(issubclass(type(v), params[0]) for v in value)
-                            elif len(value) == len(params):
-                                match = all(issubclass(type(v), t) for v, t in zip(value, params))
-                        elif issubclass(expected_type, typing.Iterable):
-                            expected_type_param = expected_type.__parameters__[0]
-                            if len(value) == 0 \
-                              or issubclass(type(next(iter(value))), expected_type_param):
-                                match = True
-                        else:
-                            match = True
-                        if not match:
-                            arg_score = -1
-                            break
-                    else:
-                        match = True
-                        if inspect.isabstract(expected_type):
-                            type_specificity += SP_D_ABSTRACT
-                    if match:
-                        type_score += 1
-                    if _type is expected_type:
-                        exact_score += 1
-                else:
-                    # Discard immediately on type mismatch.
-                    arg_score = -1
-                    break
-                type_specificity += len(expected_type.__mro__)
-                if expected_type_param:
-                    if expected_type_param is AnyType:
-                        param_specificify = SP_ANY
-                    else:
-                        param_specificity = len(expected_type_param.__mro__)
-                else:
-                    param_specificity = SP_DEFAULT
-                specificity_score[param_pos] = (type_specificity, param_specificity)
+            if value is None and defaults.get(argname, _empty) is None:
+                expected_type = type(None)
             else:
-                specificity_score[param_pos] = (SP_ANY, SP_DEFAULT)
-        if arg_score < 0:
-            continue
-        score = (arg_score, type_score, exact_score, specificity_score, sig_score, var_score)
-        matches.append(Match(score, func, sig))
+                expected_type = sig[param_pos]
+            match, exact, specificity = compare(value, expected_type)
+            specificity_score[param_pos] = specificity
+            if match == -1:
+                break
+            if match:
+                type_score += 1
+            if exact:
+                exact_score += 1
+        else:
+            score = (arg_score, type_score, exact_score, specificity_score, sig_score, var_score)
+            matches.append(Match(score, func, sig))
     if matches:
         matches = sorted(matches, key=lambda m: m.score, reverse=True)
-        # if DEBUG and len(matches) > 1:
-        #     assert matches[0].score > matches[1].score
+        if DEBUG and len(matches) > 1:
+            assert matches[0].score > matches[1].score
         return matches[0].func
     else:
         return None
+
+
+def compare(value, expected_type):
+    if expected_type is AnyType:
+        return (0, False, (SP_ANY, SP_ANY))
+    type_ = type(value)
+    type_param = None
+    if not issubclass(type_, expected_type):
+        # Discard immediately on type mismatch.
+        return (-1, False, None)
+    type_specificity = SP_TYPE
+    param_specificity = SP_ANY
+    if typing and issubclass(expected_type, typing.Union):
+        types = [t for t in expected_type.__union_params__ if issubclass(type_, t)]
+        if len(types) > 1:
+            types = sorted(types, key=partial(compare, value), reverse=True)
+        expected_type = types[0]
+    if typing and isinstance(expected_type, typing.TypingMeta):
+        type_specificity = SP_TYPING
+        match = False
+        if issubclass(expected_type, typing.Tuple):
+            type_specificity = SP_TYPING_TUPLE
+            params = expected_type.__tuple_params__
+            if params:
+                type_param = params[0]
+                if expected_type.__tuple_use_ellipsis__:
+                    match = all(issubclass(type(v), params[0]) for v in value)
+                elif len(value) == len(params):
+                    match = all(issubclass(type(v), t) for v, t in zip(value, params))
+            else:
+                match = True
+        elif issubclass(expected_type, typing.Iterable):
+            type_param = expected_type.__parameters__[0]
+            if len(value) == 0 \
+              or issubclass(type(next(iter(value))), type_param):
+                match = True
+        elif isinstance(expected_type, typing.GenericMeta):
+            match = True
+            if expected_type.__parameters__:
+                type_param = expected_type.__parameters__[0]
+        else:
+            match = True
+        if not match:
+            return (-1, False, None)
+        if type_param and type_param is not AnyType:
+            if isinstance(type_param, typing.TypeVar):
+                param_specificity = SP_TYPING
+            else:
+                param_specificity = SP_TYPE
+    elif inspect.isabstract(expected_type):
+        type_specificity = SP_ABSTRACT
+    if type_ is expected_type:
+        exact = True
+    else:
+        exact = False
+    type_specificity += len(expected_type.__mro__)
+    if type_param:
+        param_specificity += len(type_param.__mro__)
+    return (1, exact, (type_specificity, param_specificity))
 
 
 def get_type_signature(func, *, required_only=False):
@@ -333,11 +343,15 @@ def normalize_type(type_, _level=0):
     if isinstance(type_, typing.TypeVar):
         return type_
     if issubclass(type_, typing.Union):
-        return typing.Union[tuple(normalize_type(t, _level) for t in type_.__union_params__)]
+        if not type_.__union_params__:
+            raise OverloadingError("typing.Union must be parameterized")
+        return typing.Union[tuple(normalize_type(t, _level - 1) for t in type_.__union_params__)]
     if issubclass(type_, typing.Tuple):
         if _level > 1:
             return typing.Tuple
-        if type_.__tuple_use_ellipsis__:
+        if not type_.__tuple_params__:
+            return typing.Tuple
+        elif type_.__tuple_use_ellipsis__:
             return typing.Tuple[normalize_type(type_.__tuple_params__[0], _level), ...]
         else:
             return typing.Tuple[tuple(normalize_type(t, _level) for t in type_.__tuple_params__)]
@@ -345,20 +359,56 @@ def normalize_type(type_, _level=0):
         return typing.Callable
     if isinstance(type_, typing.GenericMeta):
         origin = type_.__origin__ or type_
-        params = type_.__parameters__
-        if issubclass(type_, typing.Iterable) and len(params) == 1 \
-          and _level == 1:
-            return origin[normalize_type(params[0], _level)]
+        if _level == 1 and is_constrained(type_):
+            return origin[tuple(normalize_type(t, _level) for t in type_.__parameters__)]
         else:
             return origin
     raise OverloadingError("%r not supported yet" % type_)
+
+
+def is_constrained(type_):
+    return (issubclass(type_, typing.Tuple) and type_.__tuple_params__ or
+            isinstance(type_, typing.GenericMeta)
+              and any(not isinstance(p, typing.TypeVar) or p.__constraints__
+                      for p in type_.__parameters__))
+
+
+def first_origin(type_):
+    while type_.__origin__:
+        type_ = type_.__origin__
+    return type_
 
 
 def sig_cmp(sig1, sig2):
     """
     Compares two normalized type signatures for validation purposes.
     """
-    return sig1 == sig2
+    if not typing:
+        if sig1 == sig2:
+            return sig1
+        else:
+            return False
+    if len(sig1) != len(sig2):
+        return False
+    sig = []
+    for idx, (t1, t2) in enumerate(zip(sig1, sig2)):
+        if t1 is AnyType and t2 is not AnyType:
+            return False
+        if t2 is AnyType and t1 is not AnyType:
+            return False
+        if t1 == t2:
+            sig.append(t1)
+        elif issubclass(t1, typing.Union) and issubclass(t2, typing.Union):
+            common = t1.__union_set_params__ & t2.__union_set_params__
+            if common:
+                sig.append(next(iter(common)))
+        elif issubclass(t1, typing.Union) and t2 in t1.__union_params__:
+            sig.append(t2)
+        elif issubclass(t2, typing.Union) and t1 in t2.__union_params__:
+            sig.append(t1)
+        else:
+            return False
+    return tuple(sig)
 
 
 class AnyTypeMeta(type):
@@ -459,7 +509,6 @@ def get_full_name(obj):
 
 __subclass_check_cache = {}
 
-
 def _issubclass(t1, t2, use_origin=False):
     """An enhanced version of ``issubclass()``.
 
@@ -482,30 +531,6 @@ def _issubclass(t1, t2, use_origin=False):
             res = issubclass(t1, t2)
         __subclass_check_cache[cache_key] = res
         return res
-
-
-def find_most_derived(items, index=None):
-    """Finds the most derived type in `items`.
-
-    `items` may also consist of tuples, in which case `index` must indicate
-    the position of the type within each tuple.
-    """
-    best = object
-    if index is None:
-        for type_ in items:
-            if type_ is not best and _issubclass(type_, best):
-                best = type_
-        return best
-    else:
-        result = []
-        for e in items:
-            type_ = e[index]
-            if _issubclass(type_, best):
-                if type_ is not best:
-                    result = []
-                    best = type_
-                result.append(e)
-        return result
 
 
 def _repr(type_):
