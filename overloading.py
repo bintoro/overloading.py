@@ -53,9 +53,9 @@ def overload(func):
     """
     if sys.version_info < (3, 3):
         raise OverloadingError("The 'overload' syntax requires Python version 3.3 or higher.")
-    true_func = unwrap(func)
-    ensure_function(true_func)
-    fname = get_full_name(true_func)
+    fn = unwrap(func)
+    ensure_function(fn)
+    fname = get_full_name(fn)
     if fname.find('<locals>') >= 0:
         raise OverloadingError("The 'overload' syntax cannot be used with nested functions. "
                                "Decorators must use functools.wraps().")
@@ -70,8 +70,8 @@ def overloaded(func):
     """
     Introduces a new overloaded function and registers its first implementation.
     """
-    true_func = unwrap(func)
-    ensure_function(true_func)
+    fn = unwrap(func)
+    ensure_function(fn)
     def dispatcher(*args, **kwargs):
         resolved = None
         if dispatcher.__cacheable:
@@ -97,12 +97,13 @@ def overloaded(func):
         __functions = [],
         __hooks = {},
         __cache = {},
-        __cacheable = True
+        __cacheable = True,
+        __maxlen = 0,
     )
     for attr in ('__module__', '__name__', '__qualname__', '__doc__'):
-        setattr(dispatcher, attr, getattr(true_func, attr, None))
-    void_implementation = is_void(true_func)
-    argspec = inspect.getfullargspec(true_func)
+        setattr(dispatcher, attr, getattr(fn, attr, None))
+    void_implementation = is_void(fn)
+    argspec = inspect.getfullargspec(fn)
     update_docstring(dispatcher, argspec, void_implementation)
     if void_implementation:
         return dispatcher
@@ -139,17 +140,17 @@ def register(dispatcher, func, *, hook=None):
     if isinstance(func, (classmethod, staticmethod)):
         wrapper = type(func)
         func = func.__func__
+    ensure_function(func)
     if isinstance(dispatcher, (classmethod, staticmethod)):
         dispatcher = dispatcher.__func__
+    dp = unwrap(dispatcher)
     try:
-        dispatcher.__functions
+        dp.__functions
     except AttributeError:
-        raise OverloadingError("%r has not been set up as an overloaded function."
-                               % dispatcher)
-    ensure_function(func)
+        raise OverloadingError("%r has not been set up as an overloaded function." % dispatcher)
     argspec = inspect.getfullargspec(unwrap(func))
     if hook:
-        dispatcher.__hooks[hook] = func
+        dp.__hooks[hook] = func
     else:
         sig_full = get_type_signature(func)
         sig_rqd = get_type_signature(func, required_only=True)
@@ -162,18 +163,19 @@ def register(dispatcher, func, *, hook=None):
                 raise OverloadingError(
                   "Failed to overload function '{0}': parameter '{1}' has "
                   "an annotation that is not a type."
-                  .format(dispatcher.__name__, argspec.args[i]))
-        for fninfo in dispatcher.__functions:
+                  .format(dp.__name__, argspec.args[i]))
+        for fninfo in dp.__functions:
             if sig_cmp(sig_rqd, get_type_signature(fninfo.func, required_only=True)) \
               and bool(argspec.varargs) == bool(fninfo.argspec.varargs):
                 raise OverloadingError(
                   "Failed to overload function '{0}': non-unique signature ({1})."
-                  .format(dispatcher.__name__, str.join(', ', (_repr(t) for t in sig_rqd))))
+                  .format(dp.__name__, str.join(', ', (_repr(t) for t in sig_rqd))))
         # All clear; register the function.
-        dispatcher.__functions.append(FunctionInfo(func, argspec, sig_full, defaults))
+        dp.__functions.append(FunctionInfo(func, argspec, sig_full, defaults))
+        dp.__maxlen = max(dp.__maxlen, len(sig_full))
         if typing and any((isinstance(t, typing.TypingMeta) and t is not AnyType for t in sig_rqd)):
-            dispatcher.__cacheable = False
-    if func.__name__ == dispatcher.__name__:
+            dp.__cacheable = False
+    if func.__name__ == dp.__name__:
         # The returned function is going to be bound to the invocation name
         # in the calling scope, so keep returning the dispatcher.
         return wrapper(dispatcher)
@@ -195,7 +197,6 @@ def find(dispatcher, args, kwargs):
     from the list of implementations registered on `dispatcher`.
     """
     matches = []
-    maxlen = max(len(fninfo.sig) for fninfo in dispatcher.__functions)
     for func_index, (func, argspec, sig, defaults) in enumerate(dispatcher.__functions):
         # Filter out arguments that will be consumed by catch-all parameters
         # or by keyword-only parameters.
@@ -226,7 +227,7 @@ def find(dispatcher, args, kwargs):
         arg_score = arg_count # >= 0
         type_score = 0
         exact_score = 0
-        specificity_score = [(SP_DEFAULT, 0)] * maxlen
+        specificity_score = [(SP_DEFAULT, 0)] * dispatcher.__maxlen
         sig_score = required_count
         var_score = -bool(argspec.varargs)
         for argname, value in args_by_key.items():
@@ -310,11 +311,11 @@ def get_type_signature(func, *, required_only=False):
     """
     Returns a tuple of type annotations representing the call signature of `func`.
     """
-    func = unwrap(func)
-    argspec = inspect.getfullargspec(func)
+    fn = unwrap(func)
+    argspec = inspect.getfullargspec(fn)
     type_hints = argspec.annotations
     if typing:
-        type_hints = typing.get_type_hints(func)
+        type_hints = typing.get_type_hints(fn)
     if required_only and argspec.defaults:
         params = argspec.args[:-len(argspec.defaults)]
     else:
