@@ -173,7 +173,6 @@ def register(dispatcher, func, *, hook=None):
         dispatcher.__functions.append(FunctionInfo(func, argspec, sig_full, defaults))
         if typing and any((isinstance(t, typing.TypingMeta) and t is not AnyType for t in sig_rqd)):
             dispatcher.__cacheable = False
-        order_functions(dispatcher.__functions)
     if func.__name__ == dispatcher.__name__:
         # The returned function is going to be bound to the invocation name
         # in the calling scope, so keep returning the dispatcher.
@@ -184,6 +183,11 @@ def register(dispatcher, func, *, hook=None):
 
 Match = namedtuple('Match', 'score, func, sig')
 
+SP_DEFAULT = -1000
+SP_ANY = -500
+SP_D_TYPING = -100
+SP_D_TYPING_TUPLE = +50
+SP_D_ABSTRACT = -100
 
 def find(dispatcher, args, kwargs):
     """
@@ -191,6 +195,7 @@ def find(dispatcher, args, kwargs):
     from the list of implementations registered on `dispatcher`.
     """
     matches = []
+    maxlen = max(len(fninfo.sig) for fninfo in dispatcher.__functions)
     for func_index, (func, argspec, sig, defaults) in enumerate(dispatcher.__functions):
         # Filter out arguments that will be consumed by catch-all parameters
         # or by keyword-only parameters.
@@ -221,13 +226,15 @@ def find(dispatcher, args, kwargs):
         arg_score = arg_count # >= 0
         type_score = 0
         exact_score = 0
-        order_score = -func_index
+        specificity_score = [(SP_DEFAULT, 0)] * maxlen
         sig_score = required_count
         var_score = -bool(argspec.varargs)
         for argname, value in args_by_key.items():
             match = False
             param_pos = argspec.args.index(argname)
             expected_type = sig[param_pos]
+            expected_type_param = None
+            type_specificity = 0
             if expected_type is not AnyType:
                 if value is None and defaults.get(argname, _empty) is None:
                     # Optional parameter got explicit None.
@@ -236,6 +243,7 @@ def find(dispatcher, args, kwargs):
                 _type = type(value)
                 if issubclass(_type, expected_type):
                     if typing and isinstance(expected_type, typing.TypingMeta):
+                        type_specificity += SP_D_TYPING
                         if issubclass(expected_type, typing.Union):
                             match = True
                             types = [t for t in expected_type.__union_params__ if issubclass(_type, t)]
@@ -244,14 +252,18 @@ def find(dispatcher, args, kwargs):
                             else:
                                 expected_type = types[0]
                         elif issubclass(expected_type, typing.Tuple):
+                            type_specificity += SP_D_TYPING_TUPLE
+                            # TODO: Unparameterized `Tuple`
                             params = expected_type.__tuple_params__
+                            expected_type_param = params[0]
                             if expected_type.__tuple_use_ellipsis__:
                                 match = all(issubclass(type(v), params[0]) for v in value)
                             elif len(value) == len(params):
                                 match = all(issubclass(type(v), t) for v, t in zip(value, params))
                         elif issubclass(expected_type, typing.Iterable):
+                            expected_type_param = expected_type.__parameters__[0]
                             if len(value) == 0 \
-                              or issubclass(type(next(iter(value))), expected_type.__parameters__[0]):
+                              or issubclass(type(next(iter(value))), expected_type_param):
                                 match = True
                         else:
                             match = True
@@ -260,6 +272,8 @@ def find(dispatcher, args, kwargs):
                             break
                     else:
                         match = True
+                        if inspect.isabstract(expected_type):
+                            type_specificity += SP_D_ABSTRACT
                     if match:
                         type_score += 1
                     if _type is expected_type:
@@ -268,112 +282,28 @@ def find(dispatcher, args, kwargs):
                     # Discard immediately on type mismatch.
                     arg_score = -1
                     break
+                type_specificity += len(expected_type.__mro__)
+                if expected_type_param:
+                    if expected_type_param is AnyType:
+                        param_specificify = SP_ANY
+                    else:
+                        param_specificity = len(expected_type_param.__mro__)
+                else:
+                    param_specificity = SP_DEFAULT
+                specificity_score[param_pos] = (type_specificity, param_specificity)
+            else:
+                specificity_score[param_pos] = (SP_ANY, SP_DEFAULT)
         if arg_score < 0:
             continue
-        score = (arg_score, type_score, exact_score, sig_score, var_score, order_score)
+        score = (arg_score, type_score, exact_score, specificity_score, sig_score, var_score)
         matches.append(Match(score, func, sig))
     if matches:
         matches = sorted(matches, key=lambda m: m.score, reverse=True)
+        # if DEBUG and len(matches) > 1:
+        #     assert matches[0].score > matches[1].score
         return matches[0].func
     else:
         return None
-
-
-def order_functions(functions):
-    """
-    Orders a list of implementations in place according to the type hierarchies
-    found at each parameter position.
-    """
-    fn_count = len(functions)
-    if fn_count < 2:
-        return
-    maxlen = max(len(fninfo.sig) for fninfo in functions)
-    next_blocks = [len(functions)]
-    for param_pos in range(maxlen):
-        blocks, next_blocks = next_blocks, []
-        slice_ = slice(0)
-        for block_length in blocks:
-            slice_ = slice(slice_.stop, slice_.stop + block_length)
-            types_ = tuple(fninfo.sig[param_pos] if len(fninfo.sig) > param_pos else NoType
-                           for fninfo in functions[slice_])
-            groups = group_types(types_)
-            if len(groups) > 0:
-                functions[slice_] = [functions[slice_.start + i] for i in chain(*groups)]
-                assert len(functions) == fn_count
-            next_blocks.extend(len(group) for group in groups)
-    functions.sort(key=partial(get_signature_comparator, maxlen=maxlen))
-
-
-def group_types(types_):
-    """
-    Categorizes the supplied types into groups of related types. The returned groups
-    consist of indexes referring to the original list.
-    """
-    groups = []
-    for i, t in enumerate(types_):
-        for group in groups:
-            least_derived = types_[group[-1]]
-            if _issubclass(t, least_derived, True):
-                group.appendleft(i)
-                break
-            elif _issubclass(least_derived, t, True):
-                group.append(i)
-                break
-        else:
-            groups.append(deque((i,)))
-    return groups
-
-
-def get_signature_comparator(fninfo, maxlen):
-    return tuple(chain(
-        (TypeComparator(type_) for type_ in fninfo.sig),
-        (TypeComparator(NoType),) * (maxlen - len(fninfo.sig)),
-        (bool(fninfo.argspec.varargs),)
-    ))
-
-
-class TypeComparatorMeta(type):
-    """
-    Ensures `TypeComparator` is initialized just once for any given type.
-    """
-    def __call__(cls, type_):
-        try:
-            return cls._registry[type_]
-        except KeyError:
-            instance = cls._registry[type_] = type.__call__(cls, type_)
-            return instance
-
-
-class TypeComparator(metaclass=TypeComparatorMeta):
-    """
-    A comparator object for ordering types according to the `issubclass()` relation.
-    """
-    _registry = {}
-
-    def __init__(self, type_):
-        self.type = type_
-        self._cache = {}
-
-    def __repr__(self):
-        return 'TypeComparator(%s)' % self.type.__name__
-
-    def __eq__(self, other):
-        return self is other
-
-    def __ne__(self, other):
-        return self is not other
-
-    def __lt__(self, other):
-        return self is not other and _issubclass(self.type, other.type)
-
-    def __gt__(self, other):
-        return self is not other and _issubclass(other.type, self.type)
-
-    def __le__(self, other):
-        return _issubclass(self.type, other.type)
-
-    def __ge__(self, other):
-        return _issubclass(other.type, self.type)
 
 
 def get_type_signature(func, *, required_only=False):

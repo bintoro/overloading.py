@@ -1,5 +1,6 @@
 import collections
 from functools import wraps
+from numbers import Number
 import sys
 
 import pytest
@@ -7,7 +8,6 @@ import pytest
 import overloading
 from overloading import *
 from overloading import OverloadingError, typing
-from overloading import TypeComparator
 
 if typing:
     from typing import (
@@ -326,18 +326,6 @@ def test_nodefault():
     assert len(f.__cache) == 2
 
 
-def test_type_comparator():
-
-    assert TypeComparator(Z)               < TypeComparator(Y)        < TypeComparator(X)
-    assert TypeComparator(MutableSequence) < TypeComparator(Sequence) < TypeComparator(Iterable)
-
-    assert TypeComparator(Iterable[Y]) < TypeComparator(Iterable[X])
-    assert TypeComparator(Iterable[X]) > TypeComparator(Iterable[Y])
-
-    assert not TypeComparator(Iterable[str]) > TypeComparator(Iterable[int])
-    assert not TypeComparator(Iterable[str]) < TypeComparator(Iterable[int])
-
-
 def test_function_ordering_1():
 
     with pytest.raises(OverloadingError):
@@ -419,6 +407,27 @@ def test_function_ordering_2():
         assert f(y,  y) == (Y, X)
         assert f({}, z) == (Iterable, Y)
         assert f(1,  y) == (int, Y)
+
+
+@requires_typing
+def test_function_ordering_3():
+
+    @overloaded
+    def f(arg: Iterable[int]):
+        return Iterable[int]
+
+    @overloads(f)
+    def f(arg: Tuple[Number, ...]):
+        return Tuple[Number, ...]
+
+    @overloads(f)
+    def f(arg: Tuple[Any, Any, Any]):
+        return Tuple[Any, Any, Any]
+
+    for _ in range(rounds):
+        assert f([1, 2, 3]) == Iterable[int]
+        assert f((1, 2, 3)) == Tuple[Number, ...]
+        assert f((1, 2, None)) == Tuple[Any, Any, Any]
 
 
 def test_arg_subtyping_1():
