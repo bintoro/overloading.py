@@ -19,7 +19,7 @@ __all__ = ['overload', 'overloaded', 'overloads']
 
 
 import ast
-from collections import namedtuple, deque
+from collections import namedtuple, deque, Mapping
 from functools import partial
 import inspect
 from itertools import chain
@@ -287,6 +287,14 @@ def compare(value, expected_type):
                     match = all(issubclass(type(v), t) for v, t in zip(value, params))
             else:
                 match = True
+        elif issubclass(expected_type, typing.Mapping):
+            key_param, type_param = expected_type.__parameters__
+            if len(value) == 0:
+                match = True
+            else:
+                k, v = next(iter(value.items()))
+                if issubclass(type(k), key_param) and issubclass(type(v), type_param):
+                    match = True
         elif issubclass(expected_type, typing.Iterable):
             type_param = expected_type.__parameters__[0]
             if len(value) == 0 \

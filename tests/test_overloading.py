@@ -12,7 +12,7 @@ from overloading import OverloadingError, typing
 if typing:
     from typing import (
         Any, Callable, Generic, Optional, TypeVar, Union, Tuple,
-        MutableSequence, Sequence, Iterable)
+        MutableSequence, Sequence, Iterable, Mapping)
 else:
     from collections import Sequence, Iterable
 
@@ -600,6 +600,10 @@ def test_typing_basics():
         return (Sequence,)
 
     @overloads(f)
+    def f(arg:Mapping):
+        return (Mapping,)
+
+    @overloads(f)
     def f(arg:list):
         return (list,)
 
@@ -618,6 +622,7 @@ def test_typing_basics():
     for _ in range(rounds):
         assert f({1, 2, 3}) == (Iterable,)
         assert f([1, 2, 3]) == (list,)
+        assert f({1: 2})    == (Mapping,)
         assert f([1, 2, 3], [1, 2, 3]) == (list, Sequence)
         assert f({1, 2, 3}, [1, 2, 3]) == (Iterable, list)
 
@@ -708,11 +713,19 @@ def test_typing_parameterized_collections():
     def f(arg: Sequence[str]):
         return Sequence[str]
 
+    @overloads(f)
+    def f(arg: Mapping[str, int]):
+        return Mapping[str, int]
+
     for _ in range(rounds):
         assert f({1, 2, 3}) == Iterable[int]
         assert f({a, b, c}) == Iterable[str]
         assert f([1, 2, 3]) == Sequence[int]
         assert f([a, b, c]) == Sequence[str]
+        assert f({a: 1}) == Mapping[str, int]
+        assert f({a: 1.0}) == Iterable[str]
+        with pytest.raises(TypeError):
+            f({1.0: a})
 
     @overloaded
     def f(arg: Iterable[X]):
