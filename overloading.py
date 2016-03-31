@@ -173,7 +173,7 @@ def register(dispatcher, func, *, hook=None):
         # All clear; register the function.
         dp.__functions.append(FunctionInfo(func, argspec, sig_full, defaults))
         dp.__maxlen = max(dp.__maxlen, len(sig_full))
-        if typing and any((isinstance(t, typing.TypingMeta) and t is not AnyType for t in sig_rqd)):
+        if typing and dp.__cacheable and any(map(is_constrained, iter_types(sig_rqd))):
             dp.__cacheable = False
     if func.__name__ == dp.__name__:
         # The returned function is going to be bound to the invocation name
@@ -339,6 +339,17 @@ def get_type_signature(func, *, required_only=False):
     else:
         params = argspec.args
     return tuple(normalize_type(type_hints.get(param, AnyType)) for param in params)
+
+
+def iter_types(types):
+    for type_ in types:
+        if type_ is AnyType:
+            pass
+        elif issubclass(type_, typing.Union):
+            for t in iter_types(type_.__union_params__):
+                yield t
+        else:
+            yield type_
 
 
 def normalize_type(type_, _level=0):

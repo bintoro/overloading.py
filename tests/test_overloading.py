@@ -619,6 +619,8 @@ def test_typing_basics():
     def f(x:Iterable, y:Sequence):
         return (Iterable, Sequence)
 
+    assert f.__cacheable is True
+
     for _ in range(rounds):
         assert f({1, 2, 3}) == (Iterable,)
         assert f([1, 2, 3]) == (list,)
@@ -716,6 +718,8 @@ def test_typing_parameterized_collections():
     @overloads(f)
     def f(arg: Mapping[str, int]):
         return Mapping[str, int]
+
+    assert f.__cacheable is False
 
     for _ in range(rounds):
         assert f({1, 2, 3}) == Iterable[int]
