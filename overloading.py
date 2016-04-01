@@ -186,7 +186,6 @@ def register(dispatcher, func, *, hook=None):
 
 Match = namedtuple('Match', 'score, func, sig')
 
-SP_DEFAULT = -100
 SP_ANY = 0
 SP_TYPE = 200
 SP_ABSTRACT = 100
@@ -229,7 +228,6 @@ def find(dispatcher, args, kwargs):
         args_by_key.update(_kwargs)
         arg_score = arg_count # >= 0
         type_score = 0
-        exact_score = 0
         specificity_score = [None] * dispatcher.__maxlen
         sig_score = required_count
         var_score = -bool(argspec.varargs)
@@ -239,16 +237,14 @@ def find(dispatcher, args, kwargs):
                 expected_type = type(None)
             else:
                 expected_type = sig[param_pos]
-            match, exact, specificity = compare(value, expected_type)
+            match, specificity = compare(value, expected_type)
             specificity_score[param_pos] = specificity
             if match == -1:
                 break
             if match:
                 type_score += 1
-            if exact:
-                exact_score += 1
         else:
-            score = (arg_score, type_score, exact_score, specificity_score, sig_score, var_score)
+            score = (arg_score, type_score, specificity_score, sig_score, var_score)
             matches.append(Match(score, func, sig))
     if matches:
         matches = sorted(matches, key=lambda m: m.score, reverse=True)
@@ -261,12 +257,12 @@ def find(dispatcher, args, kwargs):
 
 def compare(value, expected_type):
     if expected_type is AnyType:
-        return (0, False, (SP_ANY, SP_ANY))
+        return (0, (SP_ANY, SP_ANY))
     type_ = type(value)
     type_param = None
     if not issubclass(type_, expected_type):
         # Discard immediately on type mismatch.
-        return (-1, False, None)
+        return (-1, None)
     type_specificity = SP_TYPE
     param_specificity = SP_ANY
     if typing and issubclass(expected_type, typing.Union):
@@ -308,7 +304,7 @@ def compare(value, expected_type):
         else:
             match = True
         if not match:
-            return (-1, False, None)
+            return (-1, None)
         if type_param and type_param is not AnyType:
             if isinstance(type_param, typing.TypeVar):
                 param_specificity = SP_TYPING
@@ -316,14 +312,10 @@ def compare(value, expected_type):
                 param_specificity = SP_TYPE
     elif inspect.isabstract(expected_type):
         type_specificity = SP_ABSTRACT
-    if type_ is expected_type:
-        exact = True
-    else:
-        exact = False
     type_specificity += len(expected_type.__mro__)
     if type_param:
         param_specificity += len(type_param.__mro__)
-    return (1, exact, (type_specificity, param_specificity))
+    return (1, (type_specificity, param_specificity))
 
 
 def get_type_signature(func, *, required_only=False):

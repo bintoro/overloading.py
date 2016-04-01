@@ -422,7 +422,7 @@ def test_function_ordering_2():
         return (int, Y)
 
     for _ in range(rounds):
-        assert f(z,  z) == (X, Z)
+        assert f(z,  z) == (Y, X)
         assert f(y,  y) == (Y, X)
         assert f({}, z) == (Iterable, Y)
         assert f(1,  y) == (int, Y)
@@ -535,7 +535,7 @@ def test_arg_subtyping_4():
         return ('Y', 'Z', 'X', 'Z')
 
     for _ in range(rounds):
-        assert f(z, z, z, z) == ('Y', 'Z', 'X', 'Z')
+        assert f(z, z, z, z) == ('Z', 'X', 'Y', 'Y')
 
 
 def test_abc():
