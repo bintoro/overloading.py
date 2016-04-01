@@ -26,7 +26,6 @@ from itertools import chain
 import re
 import sys
 import types
-from weakref import WeakValueDictionary
 
 try:
     import typing
@@ -125,7 +124,7 @@ def overloads(dispatcher, hook=None):
 ##
 
 
-__registry = WeakValueDictionary()
+__registry = {}
 
 FunctionInfo = namedtuple('FunctionInfo', 'func, argspec, sig, defaults')
 
@@ -136,13 +135,13 @@ def register(dispatcher, func, *, hook=None):
     """
     Registers `func` as an implementation on `dispatcher`.
     """
-    wrapper = lambda x: x
+    wrapper = None
     if isinstance(func, (classmethod, staticmethod)):
         wrapper = type(func)
         func = func.__func__
     ensure_function(func)
     if isinstance(dispatcher, (classmethod, staticmethod)):
-        dispatcher = dispatcher.__func__
+        wrapper = None
     dp = unwrap(dispatcher)
     try:
         dp.__functions
@@ -175,6 +174,8 @@ def register(dispatcher, func, *, hook=None):
         dp.__maxlen = max(dp.__maxlen, len(sig_full))
         if typing and dp.__cacheable and any(map(is_constrained, iter_types(sig_rqd))):
             dp.__cacheable = False
+    if wrapper is None:
+        wrapper = lambda x: x
     if func.__name__ == dp.__name__:
         # The returned function is going to be bound to the invocation name
         # in the calling scope, so keep returning the dispatcher.

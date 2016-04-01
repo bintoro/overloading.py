@@ -853,29 +853,10 @@ def test_classes():
     import _test_classes
 
 
+@min33
 def test_classmethods():
 
-    class C:
-
-        @classmethod
-        @overloaded
-        def f(cls, *args):
-            return 'default'
-
-        @classmethod
-        @overloads(f)
-        def f(cls, foo, bar:int):
-            return ('any', 'int')
-
-        @classmethod
-        @overloads(f)
-        def f(cls, foo, bar):
-            return ('any', 'any')
-
-    for _ in range(rounds):
-        assert C.f(a, b, c) == 'default'
-        assert C.f(a, 2)    == ('any', 'int')
-        assert C.f(a, b)    == ('any', 'any')
+    import _test_classmethods
 
 
 def test_staticmethods():
@@ -887,12 +868,10 @@ def test_staticmethods():
         def f(*args):
             return 'default'
 
-        @staticmethod
         @overloads(f)
         def f(foo, bar:int):
             return ('any', 'int')
 
-        @staticmethod
         @overloads(f)
         def g(foo, bar):
             return ('any', 'any')
@@ -910,8 +889,8 @@ def test_staticmethods():
         def f(*args):
             return 'default'
 
-        @staticmethod
         @overloads(f)
+        @staticmethod
         def f(foo, bar:int):
             return ('any', 'int')
 
