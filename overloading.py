@@ -284,23 +284,28 @@ def compare(value, expected_type):
                     match = all(issubclass(type(v), t) for v, t in zip(value, params))
             else:
                 match = True
-        elif issubclass(expected_type, typing.Mapping):
-            key_param, type_param = expected_type.__parameters__
-            if len(value) == 0:
-                match = True
-            else:
-                k, v = next(iter(value.items()))
-                if issubclass(type(k), key_param) and issubclass(type(v), type_param):
-                    match = True
-        elif issubclass(expected_type, typing.Iterable):
-            type_param = expected_type.__parameters__[0]
-            if len(value) == 0 \
-              or issubclass(type(next(iter(value))), type_param):
-                match = True
         elif isinstance(expected_type, typing.GenericMeta):
-            match = True
-            if expected_type.__parameters__:
+            for base in expected_type.__mro__:
+                if base.__module__ == 'typing':
+                    base_generic = first_origin(base)
+                    break
+            if issubclass(base_generic, typing.Mapping):
+                key_param, type_param = expected_type.__parameters__
+                if len(value) == 0:
+                    match = True
+                else:
+                    k, v = next(iter(value.items()))
+                    if issubclass(type(k), key_param) and issubclass(type(v), type_param):
+                        match = True
+            elif issubclass(base_generic, typing.Iterable):
                 type_param = expected_type.__parameters__[0]
+                if len(value) == 0 \
+                  or issubclass(type(next(iter(value))), type_param):
+                    match = True
+            else:
+                match = True
+                if expected_type.__parameters__:
+                    type_param = expected_type.__parameters__[0]
         else:
             match = True
         if not match:
