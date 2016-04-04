@@ -258,7 +258,7 @@ def compare(value, expected_type):
     if expected_type is AnyType:
         return (0, (SP_ANY, SP_ANY))
     type_ = type(value)
-    type_param = None
+    params = ()
     if not issubclass(type_, expected_type):
         # Discard immediately on type mismatch.
         return (-1, None)
@@ -276,49 +276,85 @@ def compare(value, expected_type):
             type_specificity = SP_TYPING_TUPLE
             params = expected_type.__tuple_params__
             if params:
-                type_param = params[0]
                 if expected_type.__tuple_use_ellipsis__:
                     match = all(issubclass(type(v), params[0]) for v in value)
-                elif len(value) == len(params):
-                    match = all(issubclass(type(v), t) for v, t in zip(value, params))
+                else:
+                    match = len(value) == len(params) and \
+                            all(issubclass(type(v), t) for v, t in zip(value, params))
             else:
                 match = True
-        elif isinstance(expected_type, typing.GenericMeta):
+        elif isinstance(expected_type, typing.GenericMeta) and expected_type.__parameters__:
+            # Locate the underlying known generic.
             for base in expected_type.__mro__:
                 if base.__module__ == 'typing':
                     base_generic = first_origin(base)
                     break
-            if issubclass(base_generic, typing.Mapping):
-                key_param, type_param = expected_type.__parameters__
-                if len(value) == 0:
-                    match = True
-                else:
-                    k, v = next(iter(value.items()))
-                    if issubclass(type(k), key_param) and issubclass(type(v), type_param):
-                        match = True
-            elif issubclass(base_generic, typing.Iterable):
-                type_param = expected_type.__parameters__[0]
-                if len(value) == 0 \
-                  or issubclass(type(next(iter(value))), type_param):
-                    match = True
-            else:
+            params = expected_type.__parameters__
+            base_params = base_generic.__parameters__
+            if base_generic is typing.Generic or len(params) > len(base_params):
+                # Type-checking not possible
                 match = True
-                if expected_type.__parameters__:
-                    type_param = expected_type.__parameters__[0]
+            else:
+                # Locate the nearest type variables.
+                type_vars = [None] * len(base_params)
+                unknown = set(range(len(base_params)))
+                it = iter_generic_params(expected_type)
+                while unknown:
+                    for i, t in enumerate(next(it)):
+                        if i in unknown and isinstance(t, typing.TypeVar):
+                            type_vars[i] = t
+                            unknown.remove(i)
+                # Type-check the value.
+                if issubclass(base_generic, typing.Mapping):
+                    if len(value) == 0:
+                        match = True
+                    else:
+                        key = next(iter(value))
+                        item_types = (type(key), type(value[key]))
+                elif issubclass(base_generic, typing.Iterable):
+                    try:
+                        item_types = (type(next(iter(value))),)
+                    except StopIteration:
+                        match = True
+                else:
+                    # Type-checking not implemented for this type
+                    match = True
+                if not match:
+                    for item_type, param, type_var in zip(item_types, params, type_vars):
+                        if isinstance(param, typing.TypeVar):
+                            type_var = param
+                            if type_var.__constraints__:
+                                param = type_var.__constraints__
+                                direct_match = item_type in param
+                            elif type_var.__bound__:
+                                param = type_var.__bound__
+                                direct_match = item_type is param
+                            else:
+                                direct_match = True
+                        else:
+                            direct_match = item_type is param
+                        match = direct_match or \
+                                type_var.__covariant__ and issubclass(item_type, param) or \
+                                type_var.__contravariant__ and issubclass(param, item_type)
+                        if not match:
+                            break
         else:
             match = True
         if not match:
             return (-1, None)
-        if type_param and type_param is not AnyType:
-            if isinstance(type_param, typing.TypeVar):
-                param_specificity = SP_TYPING
-            else:
-                param_specificity = SP_TYPE
+        if params:
+            for param in params:
+                if param is AnyType:
+                    continue
+                if isinstance(param, typing.TypeVar):
+                    param_specificity += SP_TYPING
+                else:
+                    param_specificity += SP_TYPE
+                param_specificity += len(param.__mro__)
+            param_specificity /= len(params)
     elif inspect.isabstract(expected_type):
         type_specificity = SP_ABSTRACT
     type_specificity += len(expected_type.__mro__)
-    if type_param:
-        param_specificity += len(type_param.__mro__)
     return (1, (type_specificity, param_specificity))
 
 
@@ -393,6 +429,17 @@ def first_origin(type_):
     while type_.__origin__:
         type_ = type_.__origin__
     return type_
+
+
+def iter_generic_params(type_):
+    for t in type_.__mro__:
+        if not isinstance(t, typing.GenericMeta):
+            continue
+        yield t.__parameters__
+        t = t.__origin__
+        while t:
+            yield t.__parameters__
+            t = t.__origin__
 
 
 def sig_cmp(sig1, sig2):

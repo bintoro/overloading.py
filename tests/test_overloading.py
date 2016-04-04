@@ -744,6 +744,82 @@ def test_typing_parameterized_collections():
         assert f({y, y, y}) == Iterable[Y]
         assert f([z, z, z]) == Iterable[Y]
 
+    V = TypeVar('V', bound=X, covariant=True)
+
+    class XIterable(Iterable[V], set):
+        pass
+
+    @overloaded
+    def f(arg: XIterable):
+        return XIterable
+
+    @overloads(f)
+    def f(arg: Iterable[Y]):
+        return Iterable[Y]
+
+    for _ in range(rounds):
+        assert f(XIterable({x, x, x})) == XIterable
+        assert f(XIterable({y, y, y})) == XIterable
+        assert f(XIterable([z, z, z])) == XIterable
+
+    T = TypeVar('T')
+
+    @overloaded
+    def f(arg: Iterable[X]):
+        return X
+
+    @overloads(f)
+    def f(arg: Iterable[T][Y]):
+        return Y
+
+    for _ in range(rounds):
+        assert f([x, x, x]) == X
+        assert f([y, y, y]) == Y
+        assert f([z, z, z]) == X
+        assert f([])        == Y
+
+
+@requires_typing
+def test_typing_mapping():
+
+    K = TypeVar('K', covariant=True)
+    T = TypeVar('T')
+
+    CovariantKeyDict = Mapping[K, T]
+    AnyValueDict = Mapping[int, T]
+
+    class MyInt(int): pass
+    three = MyInt(3)
+
+    class MyString(str): pass
+    hello = MyString('hello')
+
+    @overloaded
+    def f(arg: Mapping[int, str]):
+        return Mapping[int, str]
+
+    assert f({3: 'hey'}) == Mapping[int, str]
+    assert f({3: hello}) == Mapping[int, str]
+    with pytest.raises(TypeError):
+        f({three: 'hey'})
+
+    @overloaded
+    def f(arg: AnyValueDict):
+        return AnyValueDict
+
+    @overloads(f)
+    def f(arg: CovariantKeyDict[int, str]):
+        return CovariantKeyDict[int, str]
+
+    for _ in range(rounds):
+        assert f({3: 'hey'})     == CovariantKeyDict[int, str]
+        assert f({3: hello})     == AnyValueDict
+        assert f({three: 'hey'}) == CovariantKeyDict[int, str]
+        assert f({3: x})         == AnyValueDict
+        assert f({})             == CovariantKeyDict[int, str]
+        with pytest.raises(TypeError):
+            f({'hi': 'hey'})
+
 
 @requires_typing
 def test_typing_union():
