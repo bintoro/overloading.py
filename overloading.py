@@ -19,13 +19,12 @@ __all__ = ['overload', 'overloaded', 'overloads']
 
 
 import ast
-from collections import namedtuple, deque, Mapping
+from collections import namedtuple
 from functools import partial
 import inspect
-from itertools import chain
 import re
 import sys
-import types
+from types import FunctionType
 
 try:
     import typing
@@ -199,7 +198,7 @@ def find(dispatcher, args, kwargs):
     from the list of implementations registered on `dispatcher`.
     """
     matches = []
-    for func_index, (func, argspec, sig, defaults) in enumerate(dispatcher.__functions):
+    for func, argspec, sig, defaults in dispatcher.__functions:
         # Filter out arguments that will be consumed by catch-all parameters
         # or by keyword-only parameters.
         if argspec.varargs:
@@ -408,7 +407,7 @@ def sig_cmp(sig1, sig2):
     if len(sig1) != len(sig2):
         return False
     sig = []
-    for idx, (t1, t2) in enumerate(zip(sig1, sig2)):
+    for t1, t2 in zip(sig1, sig2):
         if t1 is AnyType and t2 is not AnyType:
             return False
         if t2 is AnyType and t1 is not AnyType:
@@ -429,9 +428,9 @@ def sig_cmp(sig1, sig2):
 
 
 class AnyTypeMeta(type):
-    def __subclasscheck__(self, cls):
-        if not isinstance(cls, type):
-            return super().__subclasscheck__(cls)
+    def __subclasscheck__(cls, other):
+        if not isinstance(other, type):
+            return super().__subclasscheck__(other)
         return True
 
 
@@ -441,17 +440,6 @@ class AnyType(metaclass=AnyTypeMeta):
 
 if typing:
     AnyType = typing.Any
-
-
-class NoTypeMeta(type):
-    def __subclasscheck__(self, cls):
-        if not isinstance(cls, type):
-            return super().__subclasscheck__(cls)
-        return False
-
-
-class NoType(metaclass=NoTypeMeta):
-    pass
 
 
 def error(name):
@@ -477,7 +465,7 @@ def unwrap(func):
 
 
 def ensure_function(func):
-    if not isinstance(func, types.FunctionType):
+    if not isinstance(func, FunctionType):
         raise OverloadingError("%r is not a function." % func)
 
 
@@ -522,32 +510,6 @@ def update_docstring(dispatcher, argspec, use_argspec):
 
 def get_full_name(obj):
     return obj.__module__ + '.' + obj.__qualname__
-
-
-__subclass_check_cache = {}
-
-def _issubclass(t1, t2, use_origin=False):
-    """An enhanced version of ``issubclass()``.
-
-    Specifying ``use_origin=True`` causes the relation to be evaluated using
-    the types' origins if available. Essentially this means deparameterizing
-    constrained generics back into their type variable -using forms.
-    """
-    cache_key = (t1, t2, use_origin)
-    try:
-        return __subclass_check_cache[cache_key]
-    except KeyError:
-        if t1 is AnyType:
-            res = False
-        elif t1 is NoType:
-            res = True
-        else:
-            if use_origin:
-                t1 = getattr(t1, '__origin__', None) or t1
-                t2 = getattr(t2, '__origin__', None) or t2
-            res = issubclass(t1, t2)
-        __subclass_check_cache[cache_key] = res
-        return res
 
 
 def _repr(type_):
