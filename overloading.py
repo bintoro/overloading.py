@@ -19,9 +19,10 @@ __all__ = ['overload', 'overloaded', 'overloads']
 
 
 import ast
-from collections import namedtuple
-from functools import partial
+from collections import Counter, defaultdict, namedtuple
+from functools import partial, reduce
 import inspect
+import operator
 import re
 import sys
 from types import FunctionType
@@ -70,15 +71,49 @@ def overloaded(func):
     """
     fn = unwrap(func)
     ensure_function(fn)
+
     def dispatcher(*args, **kwargs):
+
         resolved = None
-        if dispatcher.__cacheable:
-            cache_key = (tuple(type(arg) for arg in args),
-                         tuple(sorted((name, type(arg)) for (name, arg) in kwargs.items())))
-            resolved = dispatcher.__cache.get(cache_key)
+        if dispatcher.__complex_parameters:
+            cache_key_pos = []
+            cache_key_kw = []
+            for loop, arg_pairs, complexity_mapping \
+                in ([(0, enumerate(args), dispatcher.__complex_positions),
+                     (1, kwargs.items(), dispatcher.__complex_parameters)]):
+                for id, arg in arg_pairs:
+                    type_ = type(arg)
+                    element_type = None
+                    if id in complexity_mapping:
+                        try:
+                            element = next(iter(arg))
+                        except TypeError:
+                            pass
+                        except StopIteration:
+                            element_type = _empty
+                        else:
+                            complexity = complexity_mapping[id]
+                            if complexity & 8 and isinstance(arg, tuple):
+                                element_type = tuple(type(el) for el in arg)
+                            elif complexity & 4 and hasattr(arg, 'keys'):
+                                element_type = (type(element), type(arg[element]))
+                            else:
+                                element_type = type(element)
+                    if loop == 0:
+                        cache_key_pos.append((type_, element_type))
+                    else:
+                        cache_key_kw.append((id, type_, element_type))
+        else:
+            cache_key_pos = (type(arg) for arg in args)
+            cache_key_kw = ((name, type(arg)) for (name, arg) in kwargs.items()) if kwargs else None
+
+        cache_key = (tuple(cache_key_pos),
+                     tuple(sorted(cache_key_kw)) if kwargs else None)
+
+        resolved = dispatcher.__cache.get(cache_key)
         if not resolved:
             resolved = find(dispatcher, args, kwargs)
-            if resolved and dispatcher.__cacheable:
+            if resolved:
                 dispatcher.__cache[cache_key] = resolved
         if resolved:
             before = dispatcher.__hooks.get('before')
@@ -91,11 +126,13 @@ def overloaded(func):
             return result
         else:
             return error(dispatcher.__name__)
+
     dispatcher.__dict__.update(
         __functions = [],
         __hooks = {},
         __cache = {},
-        __cacheable = True,
+        __complex_positions = {},
+        __complex_parameters = {},
         __maxlen = 0,
     )
     for attr in ('__module__', '__name__', '__qualname__', '__doc__'):
@@ -127,7 +164,7 @@ __registry = {}
 
 FunctionInfo = namedtuple('FunctionInfo', ('func', 'signature'))
 
-Signature = namedtuple('Signature', ('parameters', 'types', 'defaults', 'required',
+Signature = namedtuple('Signature', ('parameters', 'types', 'complexity', 'defaults', 'required',
                                      'has_varargs', 'has_varkw', 'has_kwonly'))
 
 _empty = object()
@@ -168,9 +205,31 @@ def register(dispatcher, func, *, hook=None):
                   .format(dp.__name__, str.join(', ', (_repr(t) for t in dup_sig))))
         # All clear; register the function.
         dp.__functions.append(FunctionInfo(func, signature))
+        dp.__cache.clear()
         dp.__maxlen = max(dp.__maxlen, len(signature.parameters))
-        if typing and dp.__cacheable and any(map(is_constrained, iter_types(signature.types))):
-            dp.__cacheable = False
+        if typing:
+            # For each parameter position and name, compute a bitwise union of complexity
+            # values over all registered signatures. Retain the result for parameters where
+            # a nonzero value occurs at least twice and at least one of those values is >= 2.
+            # Such parameters require deep type-checking during function resolution.
+            position_values = defaultdict(lambda: 0)
+            keyword_values = defaultdict(lambda: 0)
+            position_counter = Counter()
+            keyword_counter = Counter()
+            for fninfo in dp.__functions:
+                sig = fninfo.signature
+                complex_positions = {i: v for i, v in enumerate(sig.complexity) if v}
+                complex_keywords = {p: v for p, v in zip(sig.parameters, sig.complexity) if v}
+                for i, v in complex_positions.items():
+                    position_values[i] |= v
+                for p, v in complex_keywords.items():
+                    keyword_values[p] |= v
+                position_counter.update(complex_positions.keys())
+                keyword_counter.update(complex_keywords.keys())
+            dp.__complex_positions = {
+                i: v for i, v in position_values.items() if v >= 2 and position_counter[i] > 1}
+            dp.__complex_parameters = {
+                p: v for p, v in keyword_values.items() if v >= 2 and keyword_counter[p] > 1}
     if wrapper is None:
         wrapper = lambda x: x
     if func.__name__ == dp.__name__:
@@ -232,9 +291,12 @@ def find(dispatcher, args, kwargs):
             param_pos = sig.parameters.index(argname)
             if value is None and sig.defaults.get(argname, _empty) is None:
                 expected_type = type(None)
+                complexity = 0
             else:
                 expected_type = sig.types[param_pos]
-            specificity = compare(value, expected_type)
+                complexity = max(dispatcher.__complex_positions.get(param_pos, 0),
+                                 dispatcher.__complex_parameters.get(argname, 0))
+            specificity = compare(value, expected_type, complexity)
             if specificity[0] == -1:
                 break
             specificity_score[param_pos] = specificity
@@ -251,7 +313,7 @@ def find(dispatcher, args, kwargs):
         return None
 
 
-def compare(value, expected_type):
+def compare(value, expected_type, complexity):
     if expected_type is AnyType:
         return (SP_ANY,)
     type_ = type(value)
@@ -262,7 +324,7 @@ def compare(value, expected_type):
     if typing and issubclass(expected_type, typing.Union):
         types = [t for t in expected_type.__union_params__ if issubclass(type_, t)]
         if len(types) > 1:
-            types = sorted(types, key=partial(compare, value), reverse=True)
+            types = sorted(types, key=partial(compare, value, complexity=complexity), reverse=True)
         expected_type = types[0]
     params = None
     if typing and isinstance(expected_type, typing.TypingMeta):
@@ -271,7 +333,7 @@ def compare(value, expected_type):
         if issubclass(expected_type, typing.Tuple):
             type_tier = SP_TUPLE
             params = expected_type.__tuple_params__
-            if params:
+            if params and complexity & 8:
                 if expected_type.__tuple_use_ellipsis__:
                     match = all(issubclass(type(v), params[0]) for v in value)
                 else:
@@ -287,8 +349,8 @@ def compare(value, expected_type):
                     break
             params = expected_type.__parameters__
             base_params = base_generic.__parameters__
-            if base_generic is typing.Generic or len(params) > len(base_params):
-                # Type-checking not possible
+            if complexity <= 1 or base_generic is typing.Generic or len(params) > len(base_params):
+                # No type-checking
                 match = True
             else:
                 # Locate the nearest type variables.
@@ -301,13 +363,13 @@ def compare(value, expected_type):
                             type_vars[i] = t
                             unknown.remove(i)
                 # Type-check the value.
-                if issubclass(base_generic, typing.Mapping):
+                if complexity & 4 and issubclass(base_generic, typing.Mapping):
                     if len(value) == 0:
                         match = True
                     else:
                         key = next(iter(value))
                         item_types = (type(key), type(value[key]))
-                elif issubclass(base_generic, typing.Iterable):
+                elif complexity & 2 and issubclass(base_generic, typing.Iterable):
                     try:
                         item_types = (type(next(iter(value))),)
                     except StopIteration:
@@ -383,7 +445,11 @@ def get_signature(func):
     # Type annotations for required parameters
     required = types[:-len(defaults)] if defaults else types
 
-    return Signature(parameters, types, defaults, required, has_varargs, has_varkw, has_kwonly)
+    # Complexity
+    complexity = tuple(map(type_complexity, types)) if typing else None
+
+    return Signature(parameters, types, complexity, defaults, required,
+                     has_varargs, has_varkw, has_kwonly)
 
 
 def iter_types(types):
@@ -423,18 +489,42 @@ def normalize_type(type_, _level=0):
         return typing.Callable
     if isinstance(type_, typing.GenericMeta):
         origin = type_.__origin__ or type_
-        if _level == 1 and is_constrained(type_):
+        if _level == 1 and type_complexity(type_):
             return origin[tuple(normalize_type(t, _level) for t in type_.__parameters__)]
         else:
             return origin
     raise OverloadingError("%r not supported yet" % type_)
 
 
-def is_constrained(type_):
-    return (issubclass(type_, typing.Tuple) and type_.__tuple_params__ or
-            isinstance(type_, typing.GenericMeta)
-              and any(not isinstance(p, typing.TypeVar) or p.__constraints__
-                      for p in type_.__parameters__))
+def type_complexity(type_):
+    """Computes an indicator for the complexity of `type_`.
+
+    If the return value is 0, the supplied type is not parameterizable.
+    Otherwise, set bits in the return value denote the following features:
+    - bit 0: The type could be parameterized but is not.
+    - bit 1: The type represents an iterable container with 1 constrained type parameter.
+    - bit 2: The type represents a mapping with a constrained value type (2 parameters).
+    - bit 3: The type represents an n-tuple (n parameters).
+    Since these features are mutually exclusive, only a `Union` can have more than one bit set.
+    """
+    if not typing or not isinstance(type_, typing.TypingMeta) or type_ is AnyType:
+        return 0
+    if issubclass(type_, typing.Union):
+        return reduce(operator.or_, map(type_complexity, type_.__union_params__))
+    if issubclass(type_, typing.Tuple):
+        if type_.__tuple_params__:
+            return 1 << 3
+        else:
+            return 1
+    if isinstance(type_, typing.GenericMeta):
+        type_count = 0
+        for p in reversed(type_.__parameters__):
+            if p is AnyType:
+                continue
+            if not isinstance(p, typing.TypeVar) or type_count > 0 or p.__constraints__ or p.__bound__:
+                type_count += 1
+        return 1 << min(type_count, 2)
+    return 0
 
 
 def first_origin(type_):

@@ -619,8 +619,6 @@ def test_typing_basics():
     def f(x:Iterable, y:Sequence):
         return (Iterable, Sequence)
 
-    assert f.__cacheable is True
-
     for _ in range(rounds):
         assert f({1, 2, 3}) == (Iterable,)
         assert f([1, 2, 3]) == (list,)
@@ -636,9 +634,15 @@ def test_typing_tuple():
     def f(arg: Tuple[int, str]):
         return int, str
 
+    assert f.__complex_positions == {}
+    assert f.__complex_parameters == {}
+
     @overloads(f)
     def f(arg: Tuple[str, int]):
         return str, int
+
+    assert f.__complex_positions == {0: 8}
+    assert f.__complex_parameters == {'arg': 8}
 
     for _ in range(rounds):
         assert f((1, b)) == (int, str)
@@ -691,6 +695,7 @@ def test_typing_type_var():
 
     N = TypeVar('N', int, float)
     M = TypeVar('M', list, str)
+    L = TypeVar('L', bound=X)
     T = TypeVar('T')
 
     class Foo(Generic[T, M]):
@@ -708,6 +713,10 @@ def test_typing_type_var():
         return M
 
     @overloads(f)
+    def f(arg: Sequence[L]):
+        return L
+
+    @overloads(f)
     def f(arg: Foo):
         return Foo
 
@@ -717,6 +726,7 @@ def test_typing_type_var():
 
     assert f([1, 2, 3]) == N
     assert f([a, b, c]) == M
+    assert f([x, y, z]) == L
     assert f(Foo()) == Foo
     assert f(Bar()) == Bar
 
@@ -725,36 +735,72 @@ def test_typing_type_var():
 def test_typing_parameterized_collections():
 
     @overloaded
-    def f(arg: Iterable[int]):
+    def f(_, arg: Iterable[int]):
         return Iterable[int]
 
+    assert f.__complex_positions == {}
+    assert f.__complex_parameters == {}
+
     @overloads(f)
-    def f(arg: Iterable[str]):
+    def f(_, arg: Iterable[str]):
         return Iterable[str]
 
+    assert f.__complex_positions == {1: 2}
+    assert f.__complex_parameters == {'arg': 2}
+
     @overloads(f)
-    def f(arg: Sequence[int]):
+    def f(_, arg: Sequence[int]):
         return Sequence[int]
 
+    assert f.__complex_positions == {1: 2}
+    assert f.__complex_parameters == {'arg': 2}
+
     @overloads(f)
-    def f(arg: Sequence[str]):
+    def f(_, x: Sequence[str]):
         return Sequence[str]
 
+    assert f.__complex_positions == {1: 2}
+    assert f.__complex_parameters == {'arg': 2}
+
     @overloads(f)
-    def f(arg: Mapping[str, int]):
+    def f(_, x: Sequence):
+        return Sequence
+
+    assert f.__complex_positions == {1: 2|1}
+    assert f.__complex_parameters == {'arg': 2, 'x': 3}
+
+    @overloads(f)
+    def f(_, arg: Mapping[str, int]):
         return Mapping[str, int]
 
-    assert f.__cacheable is False
+    assert f.__complex_positions == {1: 2|1|4}
+    assert f.__complex_parameters == {'arg': 2|4, 'x': 3}
+
+    @overloads(f)
+    def f(_, arg: Tuple):
+        return Tuple
+
+    assert f.__complex_positions == {1: 2|1|4}
+    assert f.__complex_parameters == {'arg': 2|1|4, 'x': 3}
+
+    @overloads(f)
+    def f(_, arg: Tuple[int, str]):
+        return Tuple[int, str]
+
+    assert f.__complex_positions == {1: 2|1|4|8}
+    assert f.__complex_parameters == {'arg': 2|1|4|8, 'x': 3}
 
     for _ in range(rounds):
-        assert f({1, 2, 3}) == Iterable[int]
-        assert f({a, b, c}) == Iterable[str]
-        assert f([1, 2, 3]) == Sequence[int]
-        assert f([a, b, c]) == Sequence[str]
-        assert f({a: 1}) == Mapping[str, int]
-        assert f({a: 1.0}) == Iterable[str]
+        assert f(0, {1, 2, 3}) == Iterable[int]
+        assert f(0, {a, b, c}) == Iterable[str]
+        assert f(0, [1, 2, 3]) == Sequence[int]
+        assert f(0, [a, b, c]) == Sequence[str]
+        assert f(0, {a: 1}) == Mapping[str, int]
+        assert f(0, {a: 1.0}) == Iterable[str]
         with pytest.raises(TypeError):
-            f({1.0: a})
+            f(0, {1.0: a})
+
+    assert len(f.__cache) == 6
 
     @overloaded
     def f(arg: Iterable[X]):
@@ -779,9 +825,15 @@ def test_typing_parameterized_collections():
     def f(arg: XIterable):
         return XIterable
 
+    assert f.__complex_positions == {}
+    assert f.__complex_parameters == {}
+
     @overloads(f)
     def f(arg: Iterable[Y]):
         return Iterable[Y]
+
+    assert f.__complex_positions == {0: 2}
+    assert f.__complex_parameters == {'arg': 2}
 
     for _ in range(rounds):
         assert f(XIterable({x, x, x})) == XIterable
@@ -824,18 +876,27 @@ def test_typing_mapping():
     def f(arg: Mapping[int, str]):
         return Mapping[int, str]
 
-    assert f({3: 'hey'}) == Mapping[int, str]
-    assert f({3: hello}) == Mapping[int, str]
-    with pytest.raises(TypeError):
-        f({three: 'hey'})
+    for _ in range(rounds):
+        # Only one implementation => the contained types are ignored.
+        assert f({x: y}) == Mapping[int, str]
 
     @overloaded
+    def f(arg: Mapping):
+        return Mapping
+
+    @overloads(f)
     def f(arg: AnyValueDict):
         return AnyValueDict
+
+    assert f.__complex_positions == {0: 1|2}
+    assert f.__complex_parameters == {'arg': 1|2}
 
     @overloads(f)
     def f(arg: CovariantKeyDict[int, str]):
         return CovariantKeyDict[int, str]
+
+    assert f.__complex_positions == {0: 1|2|4}
+    assert f.__complex_parameters == {'arg': 1|2|4}
 
     for _ in range(rounds):
         assert f({3: 'hey'})     == CovariantKeyDict[int, str]
@@ -843,8 +904,7 @@ def test_typing_mapping():
         assert f({three: 'hey'}) == CovariantKeyDict[int, str]
         assert f({3: x})         == AnyValueDict
         assert f({})             == CovariantKeyDict[int, str]
-        with pytest.raises(TypeError):
-            f({'hi': 'hey'})
+        assert f({'hi': 'hey'})  == Mapping
 
 
 @requires_typing
