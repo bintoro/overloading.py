@@ -321,16 +321,17 @@ def compare(value, expected_type, complexity):
         # Discard immediately on type mismatch.
         return (-1,)
     type_tier = SP_TYPE
-    if typing and issubclass(expected_type, typing.Union):
+    type_specificity = None
+    if typing and isinstance(expected_type, typing.UnionMeta):
         types = [t for t in expected_type.__union_params__ if issubclass(type_, t)]
         if len(types) > 1:
             types = sorted(types, key=partial(compare, value, complexity=complexity), reverse=True)
         expected_type = types[0]
     params = None
-    if typing and isinstance(expected_type, typing.TypingMeta):
+    if typing and isinstance(expected_type, (typing.TypingMeta, GenericWrapperMeta)):
         type_tier = SP_TYPING
         match = False
-        if issubclass(expected_type, typing.Tuple):
+        if isinstance(expected_type, typing.TupleMeta):
             type_tier = SP_TUPLE
             params = expected_type.__tuple_params__
             if params and complexity & 8:
@@ -341,27 +342,11 @@ def compare(value, expected_type, complexity):
                             all(issubclass(type(v), t) for v, t in zip(value, params))
             else:
                 match = True
-        elif isinstance(expected_type, typing.GenericMeta) and expected_type.__parameters__:
-            # Locate the underlying known generic.
-            for base in expected_type.__mro__:
-                if base.__module__ == 'typing':
-                    base_generic = first_origin(base)
-                    break
-            params = expected_type.__parameters__
-            base_params = base_generic.__parameters__
-            if complexity <= 1 or base_generic is typing.Generic or len(params) > len(base_params):
-                # No type-checking
-                match = True
-            else:
-                # Locate the nearest type variables.
-                type_vars = [None] * len(base_params)
-                unknown = set(range(len(base_params)))
-                it = iter_generic_params(expected_type)
-                while unknown:
-                    for i, t in enumerate(next(it)):
-                        if i in unknown and isinstance(t, typing.TypeVar):
-                            type_vars[i] = t
-                            unknown.remove(i)
+        elif isinstance(expected_type, GenericWrapperMeta):
+            type_specificity = len(expected_type.type.__mro__)
+            base_generic = expected_type.base
+            params = expected_type.parameters
+            if complexity > 1 and expected_type.complexity > 1:
                 # Type-check the value.
                 if complexity & 4 and issubclass(base_generic, typing.Mapping):
                     if len(value) == 0:
@@ -378,6 +363,7 @@ def compare(value, expected_type, complexity):
                     # Type-checking not implemented for this type
                     match = True
                 if not match:
+                    type_vars = expected_type.type_vars
                     for item_type, param, type_var in zip(item_types, params, type_vars):
                         if isinstance(param, typing.TypeVar):
                             type_var = param
@@ -389,6 +375,8 @@ def compare(value, expected_type, complexity):
                                 direct_match = item_type is param
                             else:
                                 direct_match = True
+                        elif param is AnyType:
+                            direct_match = True
                         else:
                             direct_match = item_type is param
                         match = direct_match or \
@@ -396,6 +384,9 @@ def compare(value, expected_type, complexity):
                                 type_var.__contravariant__ and issubclass(param, item_type)
                         if not match:
                             break
+            else:
+                # No type-checking
+                match = True
         else:
             match = True
         if not match:
@@ -413,7 +404,8 @@ def compare(value, expected_type, complexity):
             param_specificity /= len(params)
     elif inspect.isabstract(expected_type):
         type_tier = SP_ABSTRACT
-    type_specificity = len(expected_type.__mro__)
+    if type_specificity is None:
+        type_specificity = len(expected_type.__mro__)
     if params:
         return (type_tier, type_specificity, param_specificity)
     else:
@@ -463,37 +455,122 @@ def iter_types(types):
             yield type_
 
 
-def normalize_type(type_, _level=0):
+def normalize_type(type_, level=0):
     """
     Reduces an arbitrarily complex type declaration into something manageable.
     """
-    _level += 1
     if not typing or not isinstance(type_, typing.TypingMeta) or type_ is AnyType:
         return type_
     if isinstance(type_, typing.TypeVar):
-        return type_
+        if type_.__constraints__ or type_.__bound__:
+            return type_
+        else:
+            return AnyType
     if issubclass(type_, typing.Union):
         if not type_.__union_params__:
             raise OverloadingError("typing.Union must be parameterized")
-        return typing.Union[tuple(normalize_type(t, _level - 1) for t in type_.__union_params__)]
+        return typing.Union[tuple(normalize_type(t, level) for t in type_.__union_params__)]
     if issubclass(type_, typing.Tuple):
-        if _level > 1:
-            return typing.Tuple
-        if not type_.__tuple_params__:
+        params = type_.__tuple_params__
+        if level > 0 or params is None:
             return typing.Tuple
         elif type_.__tuple_use_ellipsis__:
-            return typing.Tuple[normalize_type(type_.__tuple_params__[0], _level), ...]
+            return typing.Tuple[normalize_type(params[0], level + 1), ...]
         else:
-            return typing.Tuple[tuple(normalize_type(t, _level) for t in type_.__tuple_params__)]
+            return typing.Tuple[tuple(normalize_type(t, level + 1) for t in params)]
     if issubclass(type_, typing.Callable):
         return typing.Callable
     if isinstance(type_, typing.GenericMeta):
-        origin = type_.__origin__ or type_
-        if _level == 1 and type_complexity(type_):
-            return origin[tuple(normalize_type(t, _level) for t in type_.__parameters__)]
+        base = find_base_generic(type_)
+        if base is typing.Generic:
+            return type_
         else:
-            return origin
+            return GenericWrapper(type_, base, level > 0)
     raise OverloadingError("%r not supported yet" % type_)
+
+
+class GenericWrapperMeta(type):
+
+    def __new__(mcs, name, bases, attrs, type_=None, base=None, simplify=False):
+        cls = super().__new__(mcs, name, bases, attrs)
+        if type_ is None:
+            return cls
+        if base is None:
+            base = find_base_generic(type_)
+        if simplify:
+            type_ = first_origin(type_)
+        cls.type = type_
+        cls.base = base
+        cls.derive_configuration()
+        cls.complexity = type_complexity(cls)
+        cls.custom_instancecheck = \
+            type(type_).__instancecheck__ is not typing.GenericMeta.__instancecheck__
+        return cls
+
+    def __init__(cls, *_):
+        pass
+
+    def __call__(cls, type_, base=None, simplify=False):
+        return cls.__class__(cls.__name__, (), {}, type_, base, simplify)
+
+    def __eq__(cls, other):
+        if isinstance(other, GenericWrapperMeta):
+            return cls.type == other.type
+        elif isinstance(other, typing.GenericMeta):
+            return cls.type == other
+        else:
+            return False
+
+    def __hash__(cls):
+        return hash(cls.type)
+
+    def __repr__(cls):
+        return repr(cls.type)
+
+    def __instancecheck__(cls, obj):
+        return cls.type.__instancecheck__(obj)
+
+    def __subclasscheck__(cls, other):
+        return cls.type.__subclasscheck__(other)
+
+    def derive_configuration(cls):
+        """
+        Collect the nearest type variables and effective parameters from the type,
+        its bases, and their origins as necessary.
+        """
+        base_params = cls.base.__parameters__
+        if hasattr(cls.type, '__args__'):
+            # typing as of commit abefbe4
+            tvars = {p: p for p in base_params}
+            types = {}
+            for t in iter_generic_bases(cls.type):
+                if t is cls.base:
+                    type_vars = tuple(tvars[p] for p in base_params)
+                    parameters = (types.get(tvar, tvar) for tvar in type_vars)
+                    break
+                if t.__args__:
+                    for arg, tvar in zip(t.__args__, t.__origin__.__parameters__):
+                        if isinstance(arg, typing.TypeVar):
+                            tvars[tvar] = tvars.get(arg, arg)
+                        else:
+                            types[tvar] = arg
+        else:
+            # typing 3.5.0
+            tvars = [None] * len(base_params)
+            for t in iter_generic_bases(cls.type):
+                for i, p in enumerate(t.__parameters__):
+                    if tvars[i] is None and isinstance(p, typing.TypeVar):
+                        tvars[i] = p
+                if all(tvars):
+                    type_vars = tvars
+                    parameters = cls.type.__parameters__
+                    break
+        cls.type_vars = type_vars
+        cls.parameters = tuple(normalize_type(p, 1) for p in parameters)
+
+
+class GenericWrapper(metaclass=GenericWrapperMeta):
+    pass
 
 
 def type_complexity(type_):
@@ -507,7 +584,9 @@ def type_complexity(type_):
     - bit 3: The type represents an n-tuple (n parameters).
     Since these features are mutually exclusive, only a `Union` can have more than one bit set.
     """
-    if not typing or not isinstance(type_, typing.TypingMeta) or type_ is AnyType:
+    if (not typing
+      or not isinstance(type_, (typing.TypingMeta, GenericWrapperMeta))
+      or type_ is AnyType):
         return 0
     if issubclass(type_, typing.Union):
         return reduce(operator.or_, map(type_complexity, type_.__union_params__))
@@ -516,12 +595,14 @@ def type_complexity(type_):
             return 1 << 3
         else:
             return 1
-    if isinstance(type_, typing.GenericMeta):
+    if isinstance(type_, GenericWrapperMeta):
         type_count = 0
-        for p in reversed(type_.__parameters__):
+        for p in reversed(type_.parameters):
+            if type_count > 0:
+                type_count += 1
             if p is AnyType:
                 continue
-            if not isinstance(p, typing.TypeVar) or type_count > 0 or p.__constraints__ or p.__bound__:
+            if not isinstance(p, typing.TypeVar) or p.__constraints__ or p.__bound__:
                 type_count += 1
         return 1 << min(type_count, 2)
     return 0
@@ -533,14 +614,32 @@ def first_origin(type_):
     return type_
 
 
-def iter_generic_params(type_):
+def find_base_generic(type_):
+    """Locates the underlying generic whose structure and behavior are known.
+
+    For example, the base generic of a type that inherits from `typing.Mapping[T, int]`
+    is `typing.Mapping`.
+    """
+    for t in type_.__mro__:
+        if t.__module__ == typing.__name__:
+            return first_origin(t)
+
+
+def iter_generic_bases(type_):
+    """Iterates over all generics `type_` derives from, including origins.
+
+    This function is only necessary because, in typing 3.5.0, a generic doesn't
+    get included in the list of bases when it constructs a parameterized version
+    of itself. This was fixed in aab2c59; now it would be enough to just iterate
+    over the MRO.
+    """
     for t in type_.__mro__:
         if not isinstance(t, typing.GenericMeta):
             continue
-        yield t.__parameters__
+        yield t
         t = t.__origin__
         while t:
-            yield t.__parameters__
+            yield t
             t = t.__origin__
 
 
