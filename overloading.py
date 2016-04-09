@@ -345,10 +345,11 @@ def compare(value, expected_type):
             params = expected_type.__tuple_params__
             if params:
                 if expected_type.__tuple_use_ellipsis__:
-                    match = all(issubclass(type(v), params[0]) for v in value)
+                    match = len(value) == 0 or issubclass(type(value[0]), params[0])
                 else:
                     match = len(value) == len(params) and \
                             all(issubclass(type(v), t) for v, t in zip(value, params))
+                    param_specificity = 100
             else:
                 match = True
         elif isinstance(expected_type, GenericWrapperMeta):
@@ -596,10 +597,12 @@ def type_complexity(type_):
     if issubclass(type_, typing.Union):
         return reduce(operator.or_, map(type_complexity, type_.__union_params__))
     if issubclass(type_, typing.Tuple):
-        if type_.__tuple_params__:
-            return 1 << 3
-        else:
+        if type_.__tuple_params__ is None:
             return 1
+        elif type_.__tuple_use_ellipsis__:
+            return 2
+        else:
+            return 8
     if isinstance(type_, GenericWrapperMeta):
         type_count = 0
         for p in reversed(type_.parameters):

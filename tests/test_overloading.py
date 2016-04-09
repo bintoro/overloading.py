@@ -444,9 +444,9 @@ def test_function_ordering_3():
         return Tuple[Any, Any, Any]
 
     for _ in range(rounds):
-        assert f([1, 2, 3]) == Iterable[int]
-        assert f((1, 2, 3)) == Tuple[Number, ...]
-        assert f((1, 2, None)) == Tuple[Any, Any, Any]
+        assert f([1, 2, 3])    == Iterable[int]
+        assert f((1, 2, 3))    == Tuple[Any, Any, Any]
+        assert f((1, 2, 3, 4)) == Tuple[Number, ...]
 
 
 def test_arg_subtyping_1():
@@ -852,11 +852,16 @@ def test_typing_parameterized_collections():
     def f(arg: Iterable[T][Y]):
         return Y
 
+    @overloads(f)
+    def f(arg: Tuple[X, ...]):
+        return Tuple
+
     for _ in range(rounds):
         assert f([x, x, x]) == X
         assert f([y, y, y]) == Y
         assert f([z, z, z]) == X
         assert f([])        == Y
+        assert f((z, z, z)) == Tuple
 
 
 @requires_typing
