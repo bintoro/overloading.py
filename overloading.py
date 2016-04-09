@@ -22,6 +22,7 @@ import ast
 from collections import Counter, defaultdict, namedtuple
 from functools import partial, reduce
 import inspect
+from itertools import chain
 import operator
 import re
 import sys
@@ -78,9 +79,13 @@ def overloaded(func):
         if dispatcher.__complex_parameters:
             cache_key_pos = []
             cache_key_kw = []
-            for loop, arg_pairs, complexity_mapping \
-                in ([(0, enumerate(args), dispatcher.__complex_positions),
-                     (1, kwargs.items(), dispatcher.__complex_parameters)]):
+            for argset in (0, 1) if kwargs else (0,):
+                if argset == 0:
+                    arg_pairs = enumerate(args)
+                    complexity_mapping = dispatcher.__complex_positions
+                else:
+                    arg_pairs = kwargs.items()
+                    complexity_mapping = dispatcher.__complex_parameters
                 for id, arg in arg_pairs:
                     type_ = type(arg)
                     element_type = None
@@ -99,7 +104,7 @@ def overloaded(func):
                                 element_type = (type(element), type(arg[element]))
                             else:
                                 element_type = type(element)
-                    if loop == 0:
+                    if argset == 0:
                         cache_key_pos.append((type_, element_type))
                     else:
                         cache_key_kw.append((id, type_, element_type))
@@ -110,14 +115,15 @@ def overloaded(func):
         cache_key = (tuple(cache_key_pos),
                      tuple(sorted(cache_key_kw)) if kwargs else None)
 
-        resolved = dispatcher.__cache.get(cache_key)
-        if not resolved:
+        try:
+            resolved = dispatcher.__cache[cache_key]
+        except KeyError:
             resolved = find(dispatcher, args, kwargs)
             if resolved:
                 dispatcher.__cache[cache_key] = resolved
         if resolved:
-            before = dispatcher.__hooks.get('before')
-            after = dispatcher.__hooks.get('after')
+            before = dispatcher.__hooks['before']
+            after = dispatcher.__hooks['after']
             if before:
                 before(*args, **kwargs)
             result = resolved(*args, **kwargs)
@@ -129,7 +135,7 @@ def overloaded(func):
 
     dispatcher.__dict__.update(
         __functions = [],
-        __hooks = {},
+        __hooks = {'before': None, 'after': None},
         __cache = {},
         __complex_positions = {},
         __complex_parameters = {},
@@ -255,48 +261,48 @@ def find(dispatcher, args, kwargs):
     from the list of implementations registered on `dispatcher`.
     """
     matches = []
+    full_args = args
+    full_kwargs = kwargs
     for func, sig in dispatcher.__functions:
+        params = sig.parameters
+        param_count = len(params)
         # Filter out arguments that will be consumed by catch-all parameters
         # or by keyword-only parameters.
         if sig.has_varargs:
-            _args = args[:len(sig.parameters)]
+            args = full_args[:param_count]
         else:
-            _args = args
+            args = full_args
         if sig.has_varkw or sig.has_kwonly:
-            _kwargs = {kw: kwargs[kw] for kw in sig.parameters if kw in kwargs}
+            kwargs = {kw: full_kwargs[kw] for kw in params if kw in full_kwargs}
         else:
-            _kwargs = kwargs
-        kwarg_set = set(_kwargs)
-        arg_count = len(_args) + len(_kwargs)
+            kwargs = full_kwargs
+        kwarg_set = set(kwargs)
+        arg_count = len(args) + len(kwargs)
         optional_count = len(sig.defaults)
-        required_count = len(sig.parameters) - optional_count
+        required_count = param_count - optional_count
         # Consider candidate functions that satisfy basic conditions:
         # - argument count matches signature
         # - all keyword arguments are recognized.
-        if not 0 <= len(sig.parameters) - arg_count <= optional_count:
+        if not 0 <= param_count - arg_count <= optional_count:
             continue
-        if not kwarg_set <= set(sig.parameters):
+        if kwargs and not kwarg_set <= set(params):
             continue
-        args_by_key = dict(zip(sig.parameters, _args))
-        if set(args_by_key) & kwarg_set:
+        if kwargs and args and kwarg_set & set(params[:len(args)]):
             raise TypeError("%s() got multiple values for the same parameter"
                             % dispatcher.__name__)
-        args_by_key.update(_kwargs)
         arg_score = arg_count # >= 0
         type_score = 0
         specificity_score = [None] * dispatcher.__maxlen
         sig_score = required_count
         var_score = -sig.has_varargs
-        for argname, value in args_by_key.items():
-            param_pos = sig.parameters.index(argname)
-            if value is None and sig.defaults.get(argname, _empty) is None:
+        indexed_kwargs = ((params.index(k), v) for k, v in kwargs.items()) if kwargs else ()
+        for param_pos, value in chain(enumerate(args), indexed_kwargs):
+            param_name = params[param_pos]
+            if value is None and sig.defaults.get(param_name, _empty) is None:
                 expected_type = type(None)
-                complexity = 0
             else:
                 expected_type = sig.types[param_pos]
-                complexity = max(dispatcher.__complex_positions.get(param_pos, 0),
-                                 dispatcher.__complex_parameters.get(argname, 0))
-            specificity = compare(value, expected_type, complexity)
+            specificity = compare(value, expected_type)
             if specificity[0] == -1:
                 break
             specificity_score[param_pos] = specificity
@@ -305,15 +311,16 @@ def find(dispatcher, args, kwargs):
             score = (arg_score, type_score, specificity_score, sig_score, var_score)
             matches.append(Match(score, func, sig))
     if matches:
-        matches = sorted(matches, key=lambda m: m.score, reverse=True)
-        if DEBUG and len(matches) > 1:
-            assert matches[0].score > matches[1].score
+        if len(matches) > 1:
+            matches.sort(key=lambda m: m.score, reverse=True)
+            if DEBUG:
+                assert matches[0].score > matches[1].score
         return matches[0].func
     else:
         return None
 
 
-def compare(value, expected_type, complexity):
+def compare(value, expected_type):
     if expected_type is AnyType:
         return (SP_ANY,)
     type_ = type(value)
@@ -325,8 +332,9 @@ def compare(value, expected_type, complexity):
     if typing and isinstance(expected_type, typing.UnionMeta):
         types = [t for t in expected_type.__union_params__ if issubclass(type_, t)]
         if len(types) > 1:
-            types = sorted(types, key=partial(compare, value, complexity=complexity), reverse=True)
-        expected_type = types[0]
+            return max(map(partial(compare, value), types))
+        else:
+            expected_type = types[0]
     params = None
     if typing and isinstance(expected_type, (typing.TypingMeta, GenericWrapperMeta)):
         type_tier = SP_TYPING
@@ -334,7 +342,7 @@ def compare(value, expected_type, complexity):
         if isinstance(expected_type, typing.TupleMeta):
             type_tier = SP_TUPLE
             params = expected_type.__tuple_params__
-            if params and complexity & 8:
+            if params:
                 if expected_type.__tuple_use_ellipsis__:
                     match = all(issubclass(type(v), params[0]) for v in value)
                 else:
@@ -344,17 +352,17 @@ def compare(value, expected_type, complexity):
                 match = True
         elif isinstance(expected_type, GenericWrapperMeta):
             type_specificity = len(expected_type.type.__mro__)
-            base_generic = expected_type.base
+            interface = expected_type.interface
             params = expected_type.parameters
-            if complexity > 1 and expected_type.complexity > 1:
+            if expected_type.complexity > 1:
                 # Type-check the value.
-                if complexity & 4 and issubclass(base_generic, typing.Mapping):
+                if interface is typing.Mapping:
                     if len(value) == 0:
                         match = True
                     else:
                         key = next(iter(value))
                         item_types = (type(key), type(value[key]))
-                elif complexity & 2 and issubclass(base_generic, typing.Iterable):
+                elif interface is typing.Iterable:
                     try:
                         item_types = (type(next(iter(value))),)
                     except StopIteration:
@@ -501,10 +509,14 @@ class GenericWrapperMeta(type):
             type_ = first_origin(type_)
         cls.type = type_
         cls.base = base
+        if issubclass(cls.base, typing.Mapping):
+            cls.interface = typing.Mapping
+        elif issubclass(cls.base, typing.Iterable):
+            cls.interface = typing.Iterable
+        else:
+            cls.interface = None
         cls.derive_configuration()
         cls.complexity = type_complexity(cls)
-        cls.custom_instancecheck = \
-            type(type_).__instancecheck__ is not typing.GenericMeta.__instancecheck__
         return cls
 
     def __init__(cls, *_):

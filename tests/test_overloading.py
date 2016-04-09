@@ -674,9 +674,10 @@ def test_typing_tuple():
         assert f((1, 2, 3)) == int
         assert f((a, b, c)) == str
         with pytest.raises(TypeError):
-            f((1, b, 3))
-        with pytest.raises(AssertionError):
-            f(())
+            f((x, 2, 3))
+        if overloading.DEBUG:
+            with pytest.raises(AssertionError):
+                f(())
 
     @overloads(f)
     def f(arg: Tuple):
@@ -685,9 +686,10 @@ def test_typing_tuple():
     for _ in range(rounds):
         assert f((1, 2, 3)) == int
         assert f((a, b, c)) == str
-        assert f((1, b, 3)) == ()
-        with pytest.raises(AssertionError):
-            f(())
+        assert f((x, 2, 3)) == ()
+        if overloading.DEBUG:
+            with pytest.raises(AssertionError):
+                f(())
 
 
 @requires_typing
@@ -876,8 +878,9 @@ def test_typing_mapping():
     def f(arg: Mapping[int, str]):
         return Mapping[int, str]
 
+    assert f({1: a}) == Mapping[int, str]
     for _ in range(rounds):
-        # Only one implementation => the contained types are ignored.
+        # Only one implementation => cache ignores contained types.
         assert f({x: y}) == Mapping[int, str]
 
     @overloaded
