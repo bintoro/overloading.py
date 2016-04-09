@@ -328,14 +328,15 @@ def compare(value, expected_type):
         # Discard immediately on type mismatch.
         return (-1,)
     type_tier = SP_TYPE
-    type_specificity = None
+    type_specificity = 0
+    param_specificity = 0
+    params = None
     if typing and isinstance(expected_type, typing.UnionMeta):
         types = [t for t in expected_type.__union_params__ if issubclass(type_, t)]
         if len(types) > 1:
             return max(map(partial(compare, value), types))
         else:
             expected_type = types[0]
-    params = None
     if typing and isinstance(expected_type, (typing.TypingMeta, GenericWrapperMeta)):
         type_tier = SP_TYPING
         match = False
@@ -400,19 +401,11 @@ def compare(value, expected_type):
         if not match:
             return (-1,)
         if params:
-            param_specificity = 0
-            for param in params:
-                if param is AnyType:
-                    continue
-                if isinstance(param, typing.TypeVar):
-                    param_specificity += 1
-                else:
-                    param_specificity += 10
-                param_specificity += len(param.__mro__)
-            param_specificity /= len(params)
+            param_specificity += (sum(len(p.__mro__) for p in params if p is not AnyType)
+                                  / len(params))
     elif inspect.isabstract(expected_type):
         type_tier = SP_ABSTRACT
-    if type_specificity is None:
+    if type_specificity == 0:
         type_specificity = len(expected_type.__mro__)
     if params:
         return (type_tier, type_specificity, param_specificity)
