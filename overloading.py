@@ -248,11 +248,10 @@ def register(dispatcher, func, *, hook=None):
 
 Match = namedtuple('Match', 'score, func, sig')
 
-SP_TYPE = 5
+SP_REGULAR = 5
 SP_ABSTRACT = 4
-SP_TUPLE = 3
-SP_TYPING = 2
-SP_ANY = 1
+SP_TYPING = 3
+SP_GENERIC = 2
 
 
 def find(dispatcher, args, kwargs):
@@ -322,14 +321,15 @@ def find(dispatcher, args, kwargs):
 
 def compare(value, expected_type):
     if expected_type is AnyType:
-        return (SP_ANY,)
+        return (0,)
     type_ = type(value)
     if not issubclass(type_, expected_type):
         # Discard immediately on type mismatch.
         return (-1,)
-    type_tier = SP_TYPE
+    type_tier = SP_REGULAR
     type_specificity = 0
     param_specificity = 0
+    mro_rank = 0
     params = None
     if typing and isinstance(expected_type, typing.UnionMeta):
         types = [t for t in expected_type.__union_params__ if issubclass(type_, t)]
@@ -341,7 +341,6 @@ def compare(value, expected_type):
         type_tier = SP_TYPING
         match = False
         if isinstance(expected_type, typing.TupleMeta):
-            type_tier = SP_TUPLE
             params = expected_type.__tuple_params__
             if params:
                 if expected_type.__tuple_use_ellipsis__:
@@ -353,11 +352,12 @@ def compare(value, expected_type):
             else:
                 match = True
         elif isinstance(expected_type, GenericWrapperMeta):
+            type_tier = SP_GENERIC
             type_specificity = len(expected_type.type.__mro__)
             interface = expected_type.interface
             params = expected_type.parameters
             if expected_type.complexity > 1:
-                # Type-check the value.
+                # Type-check the contents.
                 if interface is typing.Mapping:
                     if len(value) == 0:
                         match = True
@@ -370,7 +370,7 @@ def compare(value, expected_type):
                     except StopIteration:
                         match = True
                 else:
-                    # Type-checking not implemented for this type
+                    # Type-checking not implemented.
                     match = True
                 if not match:
                     type_vars = expected_type.type_vars
@@ -395,7 +395,7 @@ def compare(value, expected_type):
                         if not match:
                             break
             else:
-                # No type-checking
+                # No constrained parameters
                 match = True
         else:
             match = True
@@ -404,14 +404,18 @@ def compare(value, expected_type):
         if params:
             param_specificity += (sum(len(p.__mro__) for p in params if p is not AnyType)
                                   / len(params))
-    elif inspect.isabstract(expected_type):
+    if inspect.isabstract(expected_type):
         type_tier = SP_ABSTRACT
+    try:
+        mro_rank = 100 - type_.__mro__.index(expected_type)
+    except ValueError:
+        pass
     if type_specificity == 0:
         type_specificity = len(expected_type.__mro__)
     if params:
-        return (type_tier, type_specificity, param_specificity)
+        return (mro_rank, type_tier, type_specificity, param_specificity)
     else:
-        return (type_tier, type_specificity)
+        return (mro_rank, type_tier, type_specificity)
 
 
 def get_signature(func):
@@ -503,9 +507,9 @@ class GenericWrapperMeta(type):
             type_ = first_origin(type_)
         cls.type = type_
         cls.base = base
-        if issubclass(cls.base, typing.Mapping):
+        if issubclass(base, typing.Mapping):
             cls.interface = typing.Mapping
-        elif issubclass(cls.base, typing.Iterable):
+        elif issubclass(base, typing.Iterable):
             cls.interface = typing.Iterable
         else:
             cls.interface = None

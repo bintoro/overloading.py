@@ -538,6 +538,26 @@ def test_arg_subtyping_4():
         assert f(z, z, z, z) == ('Z', 'X', 'Y', 'Y')
 
 
+def test_arg_subtyping_5():
+
+    class A:
+        pass
+
+    class B(X, A):
+        pass
+
+    @overloaded
+    def f(foo: A):
+        return A
+
+    @overloads(f)
+    def f(foo: X):
+        return X
+
+    for _ in range(rounds):
+        assert f(B()) == X
+
+
 def test_abc():
 
     Iterable = collections.Iterable
