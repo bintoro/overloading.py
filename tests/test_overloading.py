@@ -1253,6 +1253,24 @@ def test_errors():
         def f(foo:int, bar):
             pass
 
+    # Recurring signature based on names
+    with pytest.raises(OverloadingError):
+        @overloaded
+        def f(foo:int, bar:str):
+            pass
+        @overloads(f)
+        def f(bar:str, foo:int):
+            pass
+
+    # Recurring signature: ambiguous for f(1, foo='a', bar=2)
+    with pytest.raises(OverloadingError):
+        @overloaded
+        def f(x:int, foo:str, bar:int):
+            pass
+        @overloads(f)
+        def f(y:int, bar:int, foo:str):
+            pass
+
     # Recurring signature with `*args`
     with pytest.raises(OverloadingError):
         @overloaded

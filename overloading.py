@@ -204,7 +204,7 @@ def register(dispatcher, func, *, hook=None):
                   "an annotation that is not a type."
                   .format(dp.__name__, signature.parameters[i]))
         for fninfo in dp.__functions:
-            dup_sig = sig_cmp(signature.required, fninfo.signature.required)
+            dup_sig = sig_cmp(signature, fninfo.signature)
             if dup_sig and signature.has_varargs == fninfo.signature.has_varargs:
                 raise OverloadingError(
                   "Failed to overload function '{0}': non-unique signature ({1})."
@@ -659,32 +659,55 @@ def sig_cmp(sig1, sig2):
     """
     Compares two normalized type signatures for validation purposes.
     """
-    if not typing:
-        if sig1 == sig2:
-            return sig1
-        else:
-            return False
-    if len(sig1) != len(sig2):
+    types1 = sig1.required
+    types2 = sig2.required
+    if len(types1) != len(types2):
         return False
-    sig = []
-    for t1, t2 in zip(sig1, sig2):
-        if t1 is AnyType and t2 is not AnyType:
-            return False
-        if t2 is AnyType and t1 is not AnyType:
-            return False
-        if t1 == t2:
-            sig.append(t1)
-        elif issubclass(t1, typing.Union) and issubclass(t2, typing.Union):
+    dup_pos = []
+    dup_kw = {}
+    for t1, t2 in zip(types1, types2):
+        match = type_cmp(t1, t2)
+        if match:
+            dup_pos.append(match)
+        else:
+            break
+    else:
+        return tuple(dup_pos)
+    kw_range = slice(len(dup_pos), len(types1))
+    kwds1 = sig1.parameters[kw_range]
+    kwds2 = sig2.parameters[kw_range]
+    if set(kwds1) != set(kwds2):
+        return False
+    kwtypes1 = dict(zip(sig1.parameters, types1))
+    kwtypes2 = dict(zip(sig2.parameters, types2))
+    for kw in kwds1:
+        match = type_cmp(kwtypes1[kw], kwtypes2[kw])
+        if match:
+            dup_kw[kw] = match
+        else:
+            break
+    else:
+        return tuple(dup_pos), dup_kw
+    return False
+
+
+def type_cmp(t1, t2):
+    if t1 is AnyType and t2 is not AnyType:
+        return False
+    if t2 is AnyType and t1 is not AnyType:
+        return False
+    if t1 == t2:
+        return t1
+    if typing:
+        if isinstance(t1, typing.UnionMeta) and isinstance(t2, typing.UnionMeta):
             common = t1.__union_set_params__ & t2.__union_set_params__
             if common:
-                sig.append(next(iter(common)))
-        elif issubclass(t1, typing.Union) and t2 in t1.__union_params__:
-            sig.append(t2)
-        elif issubclass(t2, typing.Union) and t1 in t2.__union_params__:
-            sig.append(t1)
-        else:
-            return False
-    return tuple(sig)
+                return next(iter(common))
+        elif isinstance(t1, typing.UnionMeta) and t2 in t1.__union_params__:
+            return t2
+        elif isinstance(t2, typing.UnionMeta) and t1 in t2.__union_params__:
+            return t1
+    return False
 
 
 class AnyTypeMeta(type):
