@@ -100,12 +100,12 @@ def overloaded(func):
     )
     for attr in ('__module__', '__name__', '__qualname__', '__doc__'):
         setattr(dispatcher, attr, getattr(fn, attr, None))
-    void_implementation = is_void(fn)
-    argspec = inspect.getfullargspec(fn)
-    update_docstring(dispatcher, argspec, void_implementation)
-    if void_implementation:
+    if is_void(fn):
+        update_docstring(dispatcher, fn)
         return dispatcher
-    return register(dispatcher, func)
+    else:
+        update_docstring(dispatcher)
+        return register(dispatcher, func)
 
 
 def overloads(dispatcher, hook=None):
@@ -125,7 +125,10 @@ def overloads(dispatcher, hook=None):
 
 __registry = {}
 
-FunctionInfo = namedtuple('FunctionInfo', 'func, argspec, sig, defaults')
+FunctionInfo = namedtuple('FunctionInfo', ('func', 'signature'))
+
+Signature = namedtuple('Signature', ('parameters', 'types', 'defaults', 'required',
+                                     'has_varargs', 'has_varkw', 'has_kwonly'))
 
 _empty = object()
 
@@ -146,32 +149,27 @@ def register(dispatcher, func, *, hook=None):
         dp.__functions
     except AttributeError:
         raise OverloadingError("%r has not been set up as an overloaded function." % dispatcher)
-    argspec = inspect.getfullargspec(unwrap(func))
+    fn = unwrap(func)
     if hook:
         dp.__hooks[hook] = func
     else:
-        sig_full = get_type_signature(func)
-        sig_rqd = get_type_signature(func, required_only=True)
-        if argspec.defaults:
-            defaults = {k: v for k, v in zip(argspec.args[-len(argspec.defaults):], argspec.defaults)}
-        else:
-            defaults = {}
-        for i, type_ in enumerate(sig_full):
+        signature = get_signature(fn)
+        for i, type_ in enumerate(signature.types):
             if not isinstance(type_, type):
                 raise OverloadingError(
                   "Failed to overload function '{0}': parameter '{1}' has "
                   "an annotation that is not a type."
-                  .format(dp.__name__, argspec.args[i]))
+                  .format(dp.__name__, signature.parameters[i]))
         for fninfo in dp.__functions:
-            dup_sig = sig_cmp(sig_rqd, get_type_signature(fninfo.func, required_only=True))
-            if dup_sig and bool(argspec.varargs) == bool(fninfo.argspec.varargs):
+            dup_sig = sig_cmp(signature.required, fninfo.signature.required)
+            if dup_sig and signature.has_varargs == fninfo.signature.has_varargs:
                 raise OverloadingError(
                   "Failed to overload function '{0}': non-unique signature ({1})."
                   .format(dp.__name__, str.join(', ', (_repr(t) for t in dup_sig))))
         # All clear; register the function.
-        dp.__functions.append(FunctionInfo(func, argspec, sig_full, defaults))
-        dp.__maxlen = max(dp.__maxlen, len(sig_full))
-        if typing and dp.__cacheable and any(map(is_constrained, iter_types(sig_rqd))):
+        dp.__functions.append(FunctionInfo(func, signature))
+        dp.__maxlen = max(dp.__maxlen, len(signature.parameters))
+        if typing and dp.__cacheable and any(map(is_constrained, iter_types(signature.types))):
             dp.__cacheable = False
     if wrapper is None:
         wrapper = lambda x: x
@@ -198,29 +196,29 @@ def find(dispatcher, args, kwargs):
     from the list of implementations registered on `dispatcher`.
     """
     matches = []
-    for func, argspec, sig, defaults in dispatcher.__functions:
+    for func, sig in dispatcher.__functions:
         # Filter out arguments that will be consumed by catch-all parameters
         # or by keyword-only parameters.
-        if argspec.varargs:
-            _args = args[:len(sig)]
+        if sig.has_varargs:
+            _args = args[:len(sig.parameters)]
         else:
             _args = args
-        if argspec.varkw or argspec.kwonlyargs:
-            _kwargs = {kw: kwargs[kw] for kw in argspec.args if kw in kwargs}
+        if sig.has_varkw or sig.has_kwonly:
+            _kwargs = {kw: kwargs[kw] for kw in sig.parameters if kw in kwargs}
         else:
             _kwargs = kwargs
         kwarg_set = set(_kwargs)
         arg_count = len(_args) + len(_kwargs)
-        optional_count = len(defaults)
-        required_count = len(argspec.args) - optional_count
+        optional_count = len(sig.defaults)
+        required_count = len(sig.parameters) - optional_count
         # Consider candidate functions that satisfy basic conditions:
         # - argument count matches signature
         # - all keyword arguments are recognized.
-        if not 0 <= len(argspec.args) - arg_count <= optional_count:
+        if not 0 <= len(sig.parameters) - arg_count <= optional_count:
             continue
-        if not kwarg_set <= set(argspec.args):
+        if not kwarg_set <= set(sig.parameters):
             continue
-        args_by_key = {k: v for k, v in zip(argspec.args, _args)}
+        args_by_key = dict(zip(sig.parameters, _args))
         if set(args_by_key) & kwarg_set:
             raise TypeError("%s() got multiple values for the same parameter"
                             % dispatcher.__name__)
@@ -229,13 +227,13 @@ def find(dispatcher, args, kwargs):
         type_score = 0
         specificity_score = [None] * dispatcher.__maxlen
         sig_score = required_count
-        var_score = -bool(argspec.varargs)
+        var_score = -sig.has_varargs
         for argname, value in args_by_key.items():
-            param_pos = argspec.args.index(argname)
-            if value is None and defaults.get(argname, _empty) is None:
+            param_pos = sig.parameters.index(argname)
+            if value is None and sig.defaults.get(argname, _empty) is None:
                 expected_type = type(None)
             else:
-                expected_type = sig[param_pos]
+                expected_type = sig.types[param_pos]
             specificity = compare(value, expected_type)
             if specificity[0] == -1:
                 break
@@ -360,20 +358,32 @@ def compare(value, expected_type):
         return (type_tier, type_specificity)
 
 
-def get_type_signature(func, *, required_only=False):
+def get_signature(func):
     """
-    Returns a tuple of type annotations representing the call signature of `func`.
+    Gathers information about the call signature of `func`.
     """
-    fn = unwrap(func)
-    argspec = inspect.getfullargspec(fn)
-    type_hints = argspec.annotations
-    if typing:
-        type_hints = typing.get_type_hints(fn)
-    if required_only and argspec.defaults:
-        params = argspec.args[:-len(argspec.defaults)]
-    else:
-        params = argspec.args
-    return tuple(normalize_type(type_hints.get(param, AnyType)) for param in params)
+    code = func.__code__
+
+    # Names of regular parameters
+    parameters = tuple(code.co_varnames[:code.co_argcount])
+
+    # Flags
+    has_varargs = bool(code.co_flags & inspect.CO_VARARGS)
+    has_varkw = bool(code.co_flags & inspect.CO_VARKEYWORDS)
+    has_kwonly = bool(code.co_kwonlyargcount)
+
+    # A mapping of parameter names to default values
+    default_values = func.__defaults__ or ()
+    defaults = dict(zip(parameters[-len(default_values):], default_values))
+
+    # Type annotations for all parameters
+    type_hints = typing.get_type_hints(func) if typing else func.__annotations__
+    types = tuple(normalize_type(type_hints.get(param, AnyType)) for param in parameters)
+
+    # Type annotations for required parameters
+    required = types[:-len(defaults)] if defaults else types
+
+    return Signature(parameters, types, defaults, required, has_varargs, has_varkw, has_kwonly)
 
 
 def iter_types(types):
@@ -525,12 +535,9 @@ def is_void(func):
     an overloaded function without actually registering an implementation.
     """
     try:
-        source = inspect.getsource(func)
+        source = dedent(inspect.getsource(func))
     except (OSError, IOError):
         return False
-    indent = re.match(r'\s*', source).group()
-    if indent:
-        source = re.sub('^' + indent, '', source, flags=re.M)
     fdef = next(ast.iter_child_nodes(ast.parse(source)))
     return (
       type(fdef) is ast.FunctionDef and len(fdef.body) == 1 and
@@ -538,21 +545,22 @@ def is_void(func):
       type(fdef.body[0].value) in {ast.Str, ast.Ellipsis})
 
 
-def update_docstring(dispatcher, argspec, use_argspec):
+def update_docstring(dispatcher, func=None):
     """
     Inserts a call signature at the beginning of the docstring on `dispatcher`.
-    If `use_argspec` is true, the signature is that given by `argspec`; otherwise
-    `(...)` is used.
+    The signature is taken from `func` if provided; otherwise `(...)` is used.
     """
     doc = dispatcher.__doc__ or ''
     if inspect.cleandoc(doc).startswith('%s(' % dispatcher.__name__):
         return
     sig = '(...)'
-    if argspec.args and argspec.args[0] in {'self', 'cls'}:
-        argspec.args.pop(0)
-    if use_argspec and any(argspec):
-        sig = inspect.formatargspec(*argspec)
-        sig = re.sub(r' at 0x[0-9a-f]{8,16}(?=>)', '', sig)
+    if func and func.__code__.co_argcount:
+        argspec = inspect.getfullargspec(func) # pylint: disable=deprecated-method
+        if argspec.args and argspec.args[0] in {'self', 'cls'}:
+            argspec.args.pop(0)
+        if any(argspec):
+            sig = inspect.formatargspec(*argspec) # pylint: disable=deprecated-method
+            sig = re.sub(r' at 0x[0-9a-f]{8,16}(?=>)', '', sig)
     sep = '\n' if doc.startswith('\n') else '\n\n'
     dispatcher.__doc__ = dispatcher.__name__ + sig + sep + doc
 
@@ -565,4 +573,11 @@ def _repr(type_):
     if type_ is AnyType:
         return '<any type>'
     return repr(type_)
+
+
+def dedent(text):
+    indent = re.match(r'\s*', text).group()
+    if indent:
+        text = re.sub('^' + indent, '', text, flags=re.M)
+    return text
 
