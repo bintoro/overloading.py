@@ -645,6 +645,18 @@ def test_typing_tuple():
         assert f((a, 2)) == (str, int)
         with pytest.raises(TypeError):
             f((1, 2))
+        with pytest.raises(TypeError):
+            f(())
+
+    @overloads(f)
+    def f(arg: Tuple):
+        return ()
+
+    for _ in range(rounds):
+        assert f((1, b)) == (int, str)
+        assert f((a, 2)) == (str, int)
+        assert f((1, 2)) == ()
+        assert f(())     == ()
 
     @overloaded
     def f(arg: Tuple[int, ...]):
@@ -659,6 +671,19 @@ def test_typing_tuple():
         assert f((a, b, c)) == str
         with pytest.raises(TypeError):
             f((1, b, 3))
+        with pytest.raises(AssertionError):
+            f(())
+
+    @overloads(f)
+    def f(arg: Tuple):
+        return ()
+
+    for _ in range(rounds):
+        assert f((1, 2, 3)) == int
+        assert f((a, b, c)) == str
+        assert f((1, b, 3)) == ()
+        with pytest.raises(AssertionError):
+            f(())
 
 
 @requires_typing
@@ -743,6 +768,7 @@ def test_typing_parameterized_collections():
         assert f({x, x, x}) == Iterable[X]
         assert f({y, y, y}) == Iterable[Y]
         assert f([z, z, z]) == Iterable[Y]
+        assert f([])        == Iterable[Y]
 
     V = TypeVar('V', bound=X, covariant=True)
 

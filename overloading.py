@@ -185,11 +185,11 @@ def register(dispatcher, func, *, hook=None):
 
 Match = namedtuple('Match', 'score, func, sig')
 
-SP_ANY = 0
-SP_TYPE = 200
-SP_ABSTRACT = 100
-SP_TYPING = 100
-SP_TYPING_TUPLE = 150
+SP_TYPE = 5
+SP_ABSTRACT = 4
+SP_TUPLE = 3
+SP_TYPING = 2
+SP_ANY = 1
 
 
 def find(dispatcher, args, kwargs):
@@ -236,12 +236,11 @@ def find(dispatcher, args, kwargs):
                 expected_type = type(None)
             else:
                 expected_type = sig[param_pos]
-            match, specificity = compare(value, expected_type)
-            specificity_score[param_pos] = specificity
-            if match == -1:
+            specificity = compare(value, expected_type)
+            if specificity[0] == -1:
                 break
-            if match:
-                type_score += 1
+            specificity_score[param_pos] = specificity
+            type_score += 1
         else:
             score = (arg_score, type_score, specificity_score, sig_score, var_score)
             matches.append(Match(score, func, sig))
@@ -256,24 +255,23 @@ def find(dispatcher, args, kwargs):
 
 def compare(value, expected_type):
     if expected_type is AnyType:
-        return (0, (SP_ANY, SP_ANY))
+        return (SP_ANY,)
     type_ = type(value)
-    params = ()
     if not issubclass(type_, expected_type):
         # Discard immediately on type mismatch.
-        return (-1, None)
-    type_specificity = SP_TYPE
-    param_specificity = SP_ANY
+        return (-1,)
+    type_tier = SP_TYPE
     if typing and issubclass(expected_type, typing.Union):
         types = [t for t in expected_type.__union_params__ if issubclass(type_, t)]
         if len(types) > 1:
             types = sorted(types, key=partial(compare, value), reverse=True)
         expected_type = types[0]
+    params = None
     if typing and isinstance(expected_type, typing.TypingMeta):
-        type_specificity = SP_TYPING
+        type_tier = SP_TYPING
         match = False
         if issubclass(expected_type, typing.Tuple):
-            type_specificity = SP_TYPING_TUPLE
+            type_tier = SP_TUPLE
             params = expected_type.__tuple_params__
             if params:
                 if expected_type.__tuple_use_ellipsis__:
@@ -341,21 +339,25 @@ def compare(value, expected_type):
         else:
             match = True
         if not match:
-            return (-1, None)
+            return (-1,)
         if params:
+            param_specificity = 0
             for param in params:
                 if param is AnyType:
                     continue
                 if isinstance(param, typing.TypeVar):
-                    param_specificity += SP_TYPING
+                    param_specificity += 1
                 else:
-                    param_specificity += SP_TYPE
+                    param_specificity += 10
                 param_specificity += len(param.__mro__)
             param_specificity /= len(params)
     elif inspect.isabstract(expected_type):
-        type_specificity = SP_ABSTRACT
-    type_specificity += len(expected_type.__mro__)
-    return (1, (type_specificity, param_specificity))
+        type_tier = SP_ABSTRACT
+    type_specificity = len(expected_type.__mro__)
+    if params:
+        return (type_tier, type_specificity, param_specificity)
+    else:
+        return (type_tier, type_specificity)
 
 
 def get_type_signature(func, *, required_only=False):
