@@ -5,7 +5,7 @@ overloading.py
 
 Function overloading for Python 3
 
-* Project website: https://github.com/bintoro/overloading.py
+* Project repository: https://github.com/bintoro/overloading.py
 * Documentation: https://overloading.readthedocs.org/
 
 Copyright © 2014–2016 Kalle Tuure. Released under the MIT License.
@@ -34,7 +34,7 @@ except ImportError:
     typing = None
 
 if sys.version_info < (3, 2):
-    raise RuntimeError("Module 'overloading' requires Python version 3.2 or higher.")
+    raise ImportError("Module 'overloading' requires Python version 3.2 or higher.")
 
 DEBUG = False
 

@@ -1,10 +1,17 @@
+from itertools import takewhile
+import os
+
 from setuptools import setup
+
+
+with open(os.path.join(os.path.dirname(__file__), 'README.rst')) as f:
+    readme = str.join('', takewhile(lambda l: not l.startswith('Installation'), f.readlines()[15:]))
 
 setup(
     name = 'overloading',
-    version = '0.4.0',
+    version = '0.5.0',
     description = 'Function overloading for Python 3',
-    long_description = 'https://github.com/bintoro/overloading.py',
+    long_description = '\n' + readme,
     url = 'https://github.com/bintoro/overloading.py',
     author = 'Kalle Tuure',
     author_email = 'kalle@goodtimes.fi',
